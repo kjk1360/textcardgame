@@ -1,19 +1,24 @@
 import React, { useState } from 'react';
-import { Box, Text, useApp, useInput } from 'ink';
+import { Box, Text, useApp } from 'ink';
 import { EngineProvider, useGame } from './EngineContext.js';
 import { TitleScreen } from './screens/TitleScreen.js';
 import { SlotMenuScreen } from './screens/SlotMenuScreen.js';
 import { NewCharacterScreen } from './screens/NewCharacterScreen.js';
+import { StartPhaseScreen } from './screens/StartPhaseScreen.js';
+import { MapScreen } from './screens/MapScreen.js';
+import { EventScreen } from './screens/EventScreen.js';
+import { CombatScreen } from './screens/CombatScreen.js';
+import { RestHubScreen } from './screens/RestHubScreen.js';
 import { Game } from '../engine/integration/game.js';
 import { makeDemoRegistries } from '../data/demo.js';
 
 /**
  * App — top-level router.
  *
- * Currently supports the title flow: title → slot menu → new character.
- * In-run flows (start phase / dungeon / combat / event / rest) are
- * scaffolded under construction; placeholder screens render until each
- * is wired.
+ * Two-level routing:
+ *   1. `Screen` enum: title / slot menu / new character / playing
+ *   2. When playing: PlayingRouter reads slot.state + run.activity to
+ *      pick the in-game screen (start phase / map / event / combat / rest)
  */
 
 type Screen =
@@ -65,48 +70,65 @@ function Router(): React.ReactElement {
         />
       );
     case 'playing':
-      return <PlayingPlaceholder slotIndex={screen.slotIndex} onBack={() => setScreen({ kind: 'title' })} />;
+      return (
+        <PlayingRouter
+          slotIndex={screen.slotIndex}
+          onBackToTitle={() => setScreen({ kind: 'title' })}
+        />
+      );
   }
 }
 
 /**
- * Placeholder screen for when a character is in-game. Subsequent UI
- * slices will replace this with start-phase / map / event / combat /
- * rest-hub screens.
+ * PlayingRouter — derives the in-game screen from current slot + run state.
+ * Re-evaluates on every render (since useGame() returns the singleton
+ * and EngineProvider drives re-renders on dispatch).
  */
-function PlayingPlaceholder({
+function PlayingRouter({
   slotIndex,
-  onBack,
+  onBackToTitle,
 }: {
   slotIndex: number;
-  onBack: () => void;
+  onBackToTitle: () => void;
 }): React.ReactElement {
   const game = useGame();
   const slot = game.state.slots[slotIndex]!;
-  // Esc back to title for now
-  React.useEffect(() => {
-    // no-op
-  }, []);
-  return (
-    <Box flexDirection="column" padding={1}>
-      <Text bold color="cyan">슬롯 {slotIndex + 1} — {slot.characterName ?? '?'}</Text>
-      <Text color="gray">상태: {slot.state}</Text>
-      <Box marginTop={1}>
-        <Text>탐험/전투/이벤트 화면은 다음 UI 슬라이스에서 추가됩니다.</Text>
-      </Box>
-      <Box marginTop={1}>
-        <Text dimColor>(현재는 화면이 비어 있습니다 — Ctrl+C 또는 곧 추가될 화면 확인)</Text>
-      </Box>
-      <Box marginTop={1}>
-        <PlaceholderBack onBack={onBack} />
-      </Box>
-    </Box>
-  );
-}
 
-function PlaceholderBack({ onBack }: { onBack: () => void }): React.ReactElement {
-  useInput((_input, key) => {
-    if (key.escape) onBack();
-  });
-  return <Text dimColor>Esc → 타이틀로</Text>;
+  // Death wipe → back to title automatically
+  React.useEffect(() => {
+    if (slot.state === 'empty') {
+      onBackToTitle();
+    }
+  }, [slot.state, onBackToTitle]);
+
+  if (slot.state === 'empty') {
+    return (
+      <Box flexDirection="column" padding={1}>
+        <Text color="red">캐릭터가 사망했습니다.</Text>
+        <Text dimColor>타이틀로 돌아갑니다…</Text>
+      </Box>
+    );
+  }
+
+  if (slot.state === 'inStartPhase') {
+    return <StartPhaseScreen onEnteredDungeon={() => { /* re-render covers transition */ }} />;
+  }
+
+  if (slot.state === 'atRest') {
+    return <RestHubScreen onBackToTitle={onBackToTitle} />;
+  }
+
+  if (slot.state === 'inRun') {
+    const run = game.state.run;
+    if (!run) {
+      return <Text color="red">Inconsistent state: inRun but no run object</Text>;
+    }
+    switch (run.activity.kind) {
+      case 'inMap':    return <MapScreen />;
+      case 'inEvent':  return <EventScreen />;
+      case 'inCombat': return <CombatScreen />;
+    }
+  }
+
+  return <Text dimColor>(unknown slot state)</Text>;
 }
