@@ -157,23 +157,55 @@ function matches(effect: Effect, m: EffectMatcher): boolean {
 - `'first'` / `'last'`: 첫/끝 매치만
 - `number`: N번째 매치만 (0-base)
 
-### Patch 적용 순서 (수치 충돌 시)
+### 순서 무관 보장 (Order Independence)
 
-여러 모디파이어가 같은 필드를 건드릴 때:
+**핵심 룰**: 같은 SET 의 모디파이어가 부착되어 있으면, 부착 순서와 무관하게 항상 같은 결과.
 
-1. `set.value` (절대값) — 가장 마지막에 selected가 우선
-2. `set.delta` (가산) — 누적 합산
-3. `set.mul` (승산) — 누적 곱셈
+이게 중요한 이유: 강화 이벤트는 랜덤이라 플레이어가 부착 순서를 통제 못 함. "동일 강화 셋 = 동일 성능" 이 게임적 신뢰의 기본.
 
-최종: `final = (anyAbsoluteSet ?? base + sumOfDeltas) * productOfMuls`
+### 알고리즘 (8-Phase Resolver)
 
-이걸 보장하려면 transform 순회를 두 패스로 한다:
-- 패스 1: 절대 set 수집
-- 패스 2: delta 합산
-- 패스 3: mul 누적
-- 마지막: 종합 계산
+**Phase 0 — 카논 정렬**
+- 인스턴스의 `modifiers` 를 `id` 알파벳순으로 정렬. 이후 모든 페이즈는 정렬된 순서로 순회.
 
-(또는 한 패스로 처리하되 각 필드에 `{ abs?, delta?, mul? }` 어큐뮬레이터를 유지)
+**Phase 1 — modifyEffect (3-pass 누적)**
+- 매치된 (effectIndex, field) 마다 누적기:
+  - `abs`: 알파벳상 가장 뒤의 modId 가 쓴 값이 승 (tie-breaker)
+  - `deltaSum`: 모든 delta 의 합 (가환)
+  - `mulProduct`: 모든 mul 의 곱 (가환)
+- 최종 계산: `final = (abs ?? base + Σdelta) × Πmul`, 정수 필드는 `floor` 로 절단.
+- 비수치 필드 (target 등) 는 `abs` 만 의미. delta/mul 무시 (디자이너 오류).
+
+**Phase 2 — removeEffect**
+- 매치된 효과를 필터링 (멱등).
+
+**Phase 3 — replaceEffect**
+- 매치된 효과를 교체 (정렬 순서로 — 같은 효과를 두 번 replace 면 알파벳상 뒤 modId 승).
+
+**Phase 4 — wrapEffect**
+- 매치된 효과 앞/뒤에 추가 (정렬 순서).
+
+**Phase 5 — prependEffect**
+- 시작에 삽입 (역정렬 순회 — 알파벳상 앞 modId 의 효과가 base 에 더 가깝게 위치).
+
+**Phase 6 — appendEffect**
+- 끝에 추가 (정렬 순회 — 알파벳상 앞 modId 의 효과가 base 에 더 가깝게 위치).
+
+**Phase 7 — modifyCost**
+- 모든 `delta` 합산 (가환). 결과는 `max(0, base + sum)` 로 clamp.
+
+**Phase 8 — keywords**
+- `added = ∪addKeyword`, `removed = ∪removeKeyword`
+- `final = (base ∪ added) \ removed` — **removeKeyword 가 addKeyword 를 이김** (취소가 강함).
+
+### 충돌 처리
+
+페이즈 순서로 자연스럽게 결정되지 않는 경우 (예: 같은 효과를 remove + replace) 는 디자이너가 **`Modifier.conflictsWith[]`** 로 명시적으로 차단해야 한다. 데이터 빌드 시점에 검증되어 같은 카드에 동시 부착 불가.
+
+기본 페이즈 우선순위 (디자이너가 알아둘 것):
+- `remove` > `replace` (둘 다 매치하면 remove 가 먼저 실행되어 replace 가 no-op)
+- `removeKeyword` > `addKeyword`
+- abs (큰 modId) > abs (작은 modId)
 
 ## 모디파이어 풀 시스템
 

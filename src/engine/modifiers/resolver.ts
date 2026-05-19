@@ -6,7 +6,6 @@ import type {
   Effect,
   EffectMatcher,
   EffectPatch,
-  EffectTransform,
   Modifier,
   ModifierId,
   NumericPatch,
@@ -17,22 +16,35 @@ import type {
  * Modifier resolver — composes a CardInstance's accumulated modifiers
  * with the CardDefinition's base effects into a ResolvedCard.
  *
- * Doc: 02_card_and_modifier_system.md §"모디파이어 합성 알고리즘"
+ * GUARANTEE: The same SET of modifiers always produces the same result,
+ * regardless of attach order. This is critical because the game's
+ * enhancement events are randomized — players cannot control the order
+ * in which modifiers stack.
  *
- * SEMANTIC DECISION (flagged for user confirmation):
- *   We apply transforms SEQUENTIALLY in modifier order, then transform
- *   order within each modifier. Each transform's set/delta/mul is applied
- *   immediately to the running state.
+ * Algorithm (doc: 02_card_and_modifier_system.md):
  *
- *   This deviates from the doc's spec which says: collect abs sets, sum
- *   deltas, multiply muls, then compute final = (abs ?? base+Σdelta) * Πmul.
+ *   0. Sort modifiers by ID (canonical order — eliminates attach-order effects)
  *
- *   Sequential is simpler to reason about ("modifier B sees modifier A's
- *   already-applied result"), more predictable in design tools, and
- *   matches what most card-game engines do. The 3-pass approach is more
- *   commutative-friendly but harder to debug.
+ *   1. modifyEffect — accumulate per (effectIndex, field):
+ *        - absValue: alphabetically-latest mod ID wins on tie
+ *        - deltaSum: all deltas summed (commutative)
+ *        - mulProduct: all muls multiplied (commutative)
+ *        - applied as: final = (abs ?? base + Σdelta) × Πmul, then floor
  *
- *   If you prefer the 3-pass spec, we'll re-implement and update 02_card.md.
+ *   2. removeEffect — filter matching (idempotent)
+ *   3. replaceEffect — swap matching (apply in sorted mod-id order)
+ *   4. wrapEffect — wrap matching with before/after (sorted)
+ *   5. prependEffect — insert at start (sorted, so later mods appear earlier)
+ *   6. appendEffect — push to end (sorted, so later mods appear later)
+ *
+ *   7. modifyCost — sum all deltas (commutative)
+ *   8. keywords — added = ∪addKeyword, removed = ∪removeKeyword,
+ *                  final = (base ∪ added) \ removed   (remove wins over add)
+ *
+ * For conflicting ops on the same effect (e.g., one mod removes damage,
+ * another replaces it), use Modifier.conflictsWith[] to declare them
+ * mutually exclusive — the data pipeline will prevent both from being
+ * attached at the same time.
  */
 
 export interface ModifierLookup {
@@ -42,34 +54,125 @@ export interface ModifierLookup {
 /** Rounding policy for `mul` patches on integer fields. Slay-the-Spire uses floor. */
 const roundForMul = Math.floor;
 
-/**
- * Main entry point. Returns the final card shape used by combat / UI.
- */
 export function resolveCardEffects(
   def: CardDefinition,
   instance: CardInstance,
   modifiers: ModifierLookup,
 ): ResolvedCard {
-  // Deep clone base effects so we never mutate the definition.
-  // structuredClone (Node 17+) handles our plain-object effects cleanly.
+  // 0. Canonical sort
+  const sortedInstances = [...instance.modifiers].sort((a, b) =>
+    a.id.localeCompare(b.id),
+  );
+  const sortedDefs = sortedInstances.map(mi => modifiers.get(mi.id));
+
+  // Pure-handler modifiers (customHandlerId + no transforms) don't change
+  // the resolved card at resolve time — they hook into game events.
+  const declarative = sortedDefs.filter(
+    m => !(m.customHandlerId && m.transforms.length === 0),
+  );
+
+  // Deep-clone base so we never mutate the definition.
   let effects: Effect[] = structuredClone(def.baseEffects) as Effect[];
-  let cost: Cost = def.cost;
-  const keywords = new Set<CardKeyword>(def.keywords);
-  const modifierIdsApplied: ModifierId[] = [];
 
-  for (const modInst of instance.modifiers) {
-    const mod = modifiers.get(modInst.id);
-    modifierIdsApplied.push(mod.id);
-
-    // If this is a code-handler modifier with no declarative transforms,
-    // it doesn't change the effect pipeline at resolve time — it acts
-    // on game events at play time via the registered handler.
-    if (mod.customHandlerId && mod.transforms.length === 0) continue;
-
+  // ---- Phase 1: modifyEffect (3-pass accumulators) ----
+  const accumulators = new Map<number, FieldAccumulator>();
+  for (const mod of declarative) {
     for (const tx of mod.transforms) {
-      ({ effects, cost } = applyTransform(effects, cost, keywords, tx));
+      if (tx.op !== 'modifyEffect') continue;
+      const matched = findMatchIndices(effects, tx.match);
+      for (const idx of matched) {
+        let acc = accumulators.get(idx);
+        if (!acc) {
+          acc = new FieldAccumulator();
+          accumulators.set(idx, acc);
+        }
+        acc.addPatch(tx.set, mod.id);
+      }
     }
   }
+  effects = effects.map((eff, i) => {
+    const acc = accumulators.get(i);
+    return acc ? acc.applyTo(eff) : eff;
+  });
+
+  // ---- Phase 2: removeEffect ----
+  for (const mod of declarative) {
+    for (const tx of mod.transforms) {
+      if (tx.op !== 'removeEffect') continue;
+      effects = effects.filter(e => !matchesEffect(e, tx.match));
+    }
+  }
+
+  // ---- Phase 3: replaceEffect ----
+  for (const mod of declarative) {
+    for (const tx of mod.transforms) {
+      if (tx.op !== 'replaceEffect') continue;
+      effects = effects.map(e =>
+        matchesEffect(e, tx.match) ? (structuredClone(tx.with) as Effect) : e,
+      );
+    }
+  }
+
+  // ---- Phase 4: wrapEffect ----
+  for (const mod of declarative) {
+    for (const tx of mod.transforms) {
+      if (tx.op !== 'wrapEffect') continue;
+      const next: Effect[] = [];
+      for (const e of effects) {
+        if (matchesEffect(e, tx.match)) {
+          if (tx.before) next.push(structuredClone(tx.before) as Effect);
+          next.push(e);
+          if (tx.after) next.push(structuredClone(tx.after) as Effect);
+        } else {
+          next.push(e);
+        }
+      }
+      effects = next;
+    }
+  }
+
+  // ---- Phase 5: prependEffect ----
+  // Iterating sorted-forward and unshifting means alphabetically-later
+  // mods end up closer to the start. To make alphabetically-earlier mods
+  // appear closer to the base (symmetric with append), iterate in reverse.
+  for (let i = declarative.length - 1; i >= 0; i--) {
+    const mod = declarative[i]!;
+    for (const tx of mod.transforms) {
+      if (tx.op !== 'prependEffect') continue;
+      effects.unshift(structuredClone(tx.effect) as Effect);
+    }
+  }
+
+  // ---- Phase 6: appendEffect ----
+  for (const mod of declarative) {
+    for (const tx of mod.transforms) {
+      if (tx.op !== 'appendEffect') continue;
+      effects.push(structuredClone(tx.effect) as Effect);
+    }
+  }
+
+  // ---- Phase 7: modifyCost (sum) ----
+  let costDeltaSum = 0;
+  for (const mod of declarative) {
+    for (const tx of mod.transforms) {
+      if (tx.op !== 'modifyCost') continue;
+      costDeltaSum += tx.delta;
+    }
+  }
+  const cost = adjustCost(def.cost, costDeltaSum);
+
+  // ---- Phase 8: keywords (add then remove; remove wins) ----
+  const keywords = new Set<CardKeyword>(def.keywords);
+  const added = new Set<CardKeyword>();
+  const removed = new Set<CardKeyword>();
+  for (const mod of declarative) {
+    for (const tx of mod.transforms) {
+      if (tx.op === 'addKeyword') added.add(tx.keyword);
+      else if (tx.op === 'removeKeyword') removed.add(tx.keyword);
+    }
+  }
+  for (const k of added) keywords.add(k);
+  for (const k of removed) keywords.delete(k);
 
   return {
     defId: def.id,
@@ -78,70 +181,82 @@ export function resolveCardEffects(
     target: def.target,
     keywords: [...keywords],
     effects,
-    modifierIdsApplied,
+    modifierIdsApplied: sortedInstances.map(mi => mi.id),
   };
 }
 
-interface ApplyResult {
-  effects: Effect[];
-  cost: Cost;
+// ====================================================================
+// Internals
+// ====================================================================
+
+interface AbsRecord {
+  value: unknown;
+  modId: ModifierId;
 }
 
-function applyTransform(
-  effects: Effect[],
-  cost: Cost,
-  keywords: Set<CardKeyword>,
-  tx: EffectTransform,
-): ApplyResult {
-  switch (tx.op) {
-    case 'modifyEffect': {
-      const matchedIndices = findMatchIndices(effects, tx.match);
-      for (const i of matchedIndices) {
-        effects[i] = applyPatch(effects[i]!, tx.set);
-      }
-      return { effects, cost };
-    }
-    case 'appendEffect':
-      effects.push(structuredClone(tx.effect) as Effect);
-      return { effects, cost };
-    case 'prependEffect':
-      effects.unshift(structuredClone(tx.effect) as Effect);
-      return { effects, cost };
-    case 'removeEffect': {
-      const matchedIndices = new Set(findMatchIndices(effects, tx.match));
-      effects = effects.filter((_, i) => !matchedIndices.has(i));
-      return { effects, cost };
-    }
-    case 'replaceEffect': {
-      const matchedIndices = new Set(findMatchIndices(effects, tx.match));
-      effects = effects.map((e, i) =>
-        matchedIndices.has(i) ? (structuredClone(tx.with) as Effect) : e,
-      );
-      return { effects, cost };
-    }
-    case 'wrapEffect': {
-      const matchedIndices = new Set(findMatchIndices(effects, tx.match));
-      const next: Effect[] = [];
-      for (let i = 0; i < effects.length; i++) {
-        const e = effects[i]!;
-        if (matchedIndices.has(i)) {
-          if (tx.before) next.push(structuredClone(tx.before) as Effect);
-          next.push(e);
-          if (tx.after) next.push(structuredClone(tx.after) as Effect);
-        } else {
-          next.push(e);
+class FieldAccumulator {
+  /** Latest abs per field — tie broken by alphabetically-greater mod id. */
+  private abs = new Map<string, AbsRecord>();
+  private deltaSum = new Map<string, number>();
+  private mulProduct = new Map<string, number>();
+
+  addPatch(patch: EffectPatch, modId: ModifierId): void {
+    for (const [key, val] of Object.entries(patch)) {
+      if (val === undefined) continue;
+
+      if (isNumericPatch(val)) {
+        if (typeof val === 'number') {
+          this.recordAbs(key, val, modId);
+        } else if ('delta' in val) {
+          this.deltaSum.set(key, (this.deltaSum.get(key) ?? 0) + val.delta);
+        } else if ('mul' in val) {
+          this.mulProduct.set(key, (this.mulProduct.get(key) ?? 1) * val.mul);
         }
+      } else {
+        // Non-numeric (string/enum) field — absolute set only.
+        this.recordAbs(key, val, modId);
       }
-      return { effects: next, cost };
     }
-    case 'modifyCost':
-      return { effects, cost: adjustCost(cost, tx.delta) };
-    case 'addKeyword':
-      keywords.add(tx.keyword);
-      return { effects, cost };
-    case 'removeKeyword':
-      keywords.delete(tx.keyword);
-      return { effects, cost };
+  }
+
+  private recordAbs(key: string, value: unknown, modId: ModifierId): void {
+    const cur = this.abs.get(key);
+    if (!cur || modId.localeCompare(cur.modId) > 0) {
+      this.abs.set(key, { value, modId });
+    }
+  }
+
+  applyTo(effect: Effect): Effect {
+    const result: Record<string, unknown> = { ...effect };
+    const allKeys = new Set<string>([
+      ...this.abs.keys(),
+      ...this.deltaSum.keys(),
+      ...this.mulProduct.keys(),
+    ]);
+
+    for (const key of allKeys) {
+      const absRec = this.abs.get(key);
+      const delta = this.deltaSum.get(key) ?? 0;
+      const mul = this.mulProduct.get(key) ?? 1;
+
+      // Non-numeric field: only abs is meaningful. delta/mul on non-numeric
+      // are ignored (a designer/data error — should be caught in validation).
+      if (absRec && typeof absRec.value !== 'number') {
+        result[key] = absRec.value;
+        continue;
+      }
+
+      // Numeric field
+      const base = absRec
+        ? (absRec.value as number)
+        : typeof result[key] === 'number'
+          ? (result[key] as number)
+          : 0;
+      const withDelta = base + delta;
+      const final = mul === 1 ? withDelta : roundForMul(withDelta * mul);
+      result[key] = final;
+    }
+    return result as Effect;
   }
 }
 
@@ -154,7 +269,6 @@ function findMatchIndices(effects: Effect[], m: EffectMatcher): number[] {
   if (index === 'all') return matched;
   if (index === 'first') return matched.slice(0, 1);
   if (index === 'last') return matched.slice(-1);
-  // numeric index = N-th match (0-based) among matches
   return matched[index] !== undefined ? [matched[index]!] : [];
 }
 
@@ -173,22 +287,6 @@ function matchesEffect(effect: Effect, m: EffectMatcher): boolean {
   return true;
 }
 
-function applyPatch(effect: Effect, patch: EffectPatch): Effect {
-  // Clone so we don't mutate other matched instances if any references shared.
-  const next: Record<string, unknown> = { ...effect };
-  for (const [key, val] of Object.entries(patch)) {
-    if (val === undefined) continue;
-    if (isNumericPatch(val)) {
-      const current = typeof next[key] === 'number' ? (next[key] as number) : 0;
-      next[key] = applyNumericPatch(current, val);
-    } else {
-      // String / other absolute set
-      next[key] = val;
-    }
-  }
-  return next as Effect;
-}
-
 function isNumericPatch(v: unknown): v is NumericPatch {
   if (typeof v === 'number') return true;
   if (typeof v === 'object' && v !== null) {
@@ -197,16 +295,8 @@ function isNumericPatch(v: unknown): v is NumericPatch {
   return false;
 }
 
-function applyNumericPatch(current: number, patch: NumericPatch): number {
-  if (typeof patch === 'number') return patch;
-  if ('delta' in patch) return current + patch.delta;
-  if ('mul' in patch)   return roundForMul(current * patch.mul);
-  return current;
-}
-
 function adjustCost(cost: Cost, delta: number): Cost {
-  if (cost.kind === 'unplayable') return cost; // never modifiable
-  if (cost.kind === 'x') return cost;          // X cost not modifiable by delta
-  const next = Math.max(0, cost.value + delta);
-  return { kind: 'fixed', value: next };
+  if (cost.kind === 'unplayable') return cost;
+  if (cost.kind === 'x') return cost;
+  return { kind: 'fixed', value: Math.max(0, cost.value + delta) };
 }
