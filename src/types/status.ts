@@ -81,7 +81,9 @@ export interface StatusDefinition {
 }
 
 export type DamagePipelineRule =
-  | { kind: 'outgoingMul'; multiplier: number }
-  | { kind: 'outgoingAdd'; perStack: number }
-  | { kind: 'incomingMul'; multiplier: number }
-  | { kind: 'incomingAdd'; perStack: number };
+  | { kind: 'outgoingMul'; multiplier: number }         // 약화 등 (source의 출력 데미지 ×)
+  | { kind: 'outgoingAdd'; perStack: number }            // 근력 등 (source의 출력 데미지 + stacks×N)
+  | { kind: 'incomingMul'; multiplier: number }          // 취약 등 (target의 입력 데미지 ×)
+  | { kind: 'incomingAdd'; perStack: number }            // (target의 입력 데미지 + stacks×N)
+  | { kind: 'blockGainAdd'; perStack: number }           // 민첩 등 (block 획득 + stacks×N)
+  | { kind: 'blockGainMul'; multiplier: number };        // (block 획득 × multiplier)
