@@ -8,3 +8,4 @@ export * from './combat.js';
 export * from './status.js';
 export * from './map.js';
 export * from './flow.js';
+export * from './skill.js';
