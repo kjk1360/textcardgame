@@ -424,9 +424,25 @@ interface IRandom {
 
 `combatState.rngSeed` 에서 파생된 RNG 인스턴스 사용 → 같은 시드 + 같은 입력 = 같은 결과. 디버그/재현/리플레이용.
 
+## 게임 상수 (확정 2026-05-19)
+
+데이터로 관리. 코드 단일 진실 공급원: `src/engine/constants.ts` (`DEFAULT_CONSTANTS`). Phase 4에서 `authoring/game_constants.yaml` 로 이동.
+
+| 항목 | 값 | 비고 |
+|---|---|---|
+| 손패 소프트 한도 | **10** | 일반 드로우는 이 이상 잡지 않음 (디자인 옵션) |
+| 손패 하드 한도 | **14** | 어떤 경우에도 초과 불가. 스킬 디자인 시 이 제한을 의식해서 밸런싱 |
+| 기본 에너지 | **3** | 턴마다 자동 증가 X. 스킬/카드만 증가 가능 (전투 한정 가능) |
+| 턴 드로우 | **4** | 슬더스(5)보다 1 적음. 손패에 retain 카드가 있어도 무조건 4장 추가 드로우 |
+| 첫 턴 추가 드로우 | **0** | 스킬로만 변경 |
+
+스킬 훅 예시:
+- "매 턴 +1 드로우" → `onTurnStart` hook의 `draw(1)` 효과
+- "3턴마다 +1 드로우" → 카운터 상태가 있는 스킬 (state 필드)
+- "전투 중 에너지 +1" → `onCombatStart` hook의 `gainEnergy(1)` 효과 (그 전투 동안만 — RunStartHook이 아니므로)
+
 ## 미정 (TBD)
 
-- **카드 한도 (손패 max)**: 10? 7? 디자인 결정.
-- **에너지 기본값**: 3? 4? 직업 없으니 캐릭터 시작 시 3 고정?
-- **드로우 기본값**: 5? (슬더스 표준)
-- **선택형 효과 흐름**: `discardChoose`, `exhaustChoose` 같은 효과가 있을 때 효과 실행 중간에 입력을 받아야 함 → `AwaitInput` 메커니즘으로 처리. 효과 핸들러가 `Promise` 대신 `phase = 'awaitingInput'` 으로 일시정지하고 후속 액션으로 재진입.
+- **선택형 효과 흐름** (`discardChoose`, `exhaustChoose`): 일시정지 후 재진입. ✅ 사용자 확정. 구현 세부는 Effect Executor 슬라이스에서.
+- **데미지 파이프라인 순서**: outgoing modifiers → incoming modifiers → block 흡수 → hp 차감 → 사망 체크 — 슬더스와 동일. ✅ 사용자 확정.
+- (잔여) **턴 종료 시 손패 한도 초과 처리** — retain 누적으로 14를 넘는 경우 강제 폐기? 안 그러기로 디자인했지만 안전망 필요. → Effect Executor 슬라이스에서 결정.
