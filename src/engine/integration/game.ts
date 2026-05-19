@@ -86,6 +86,7 @@ export interface SerializedSession {
     skillIds: SkillId[];
     state: 'empty' | 'atRest';
     pendingDeck?: CardInstance[];
+    draftedDeck?: CardInstance[];
   }>;
 }
 
@@ -118,7 +119,16 @@ export interface SlotData {
   character?: PlayerActor;
   /** Per-character skills (live, lost on death). */
   skillIds: SkillId[];
+  /**
+   * Cards withdrawn from inventory at the start phase, queued for the
+   * upcoming dungeon entry. Empty until the player explicitly drafts.
+   * Cleared on enterDungeon.
+   */
+  draftedDeck?: CardInstance[];
 }
+
+/** Default cap on how many cards can be drafted out of inventory per run. */
+export const DEFAULT_DRAFT_CAPACITY = 5;
 
 export type SlotKind =
   | 'empty'
@@ -270,6 +280,7 @@ export class Game {
           skillIds: s.skillIds,
           state: stableState,
           pendingDeck: ((s as any).pendingDeck as CardInstance[] | undefined) ?? [],
+          draftedDeck: s.draftedDeck ?? [],
         };
       }),
     };
@@ -298,6 +309,9 @@ export class Game {
         };
         if (s.pendingDeck && s.pendingDeck.length > 0) {
           (slot as any).pendingDeck = [...s.pendingDeck];
+        }
+        if (s.draftedDeck && s.draftedDeck.length > 0) {
+          slot.draftedDeck = [...s.draftedDeck];
         }
         return slot;
       }),
@@ -357,11 +371,63 @@ export class Game {
   // purchaseSkillBox before enterDungeon). We just go straight to dungeon.
   // ====================================================================
 
+  // ====================================================================
+  // Departure deck drafting (rest hub → start phase)
+  // ====================================================================
+
+  /**
+   * Returns the slot's draft-in-progress: cards withdrawn from inventory
+   * staged for the next departure.
+   */
+  getDraftedDeck(): ReadonlyArray<CardInstance> {
+    const slot = this.requireCurrentSlot();
+    return slot.draftedDeck ?? [];
+  }
+
+  /**
+   * Move a card from inventory → draftedDeck. Returns false when the
+   * draft cap is already at maxDraft or the card isn't in inventory.
+   */
+  draftCardFromInventory(
+    cardInstanceId: CardInstanceId,
+    maxDraft: number = DEFAULT_DRAFT_CAPACITY,
+  ): boolean {
+    const slot = this.requireCurrentSlot();
+    slot.draftedDeck ??= [];
+    if (slot.draftedDeck.length >= maxDraft) return false;
+    const idx = this.state.global.inventory.cards.findIndex(c => c.instanceId === cardInstanceId);
+    if (idx < 0) return false;
+    const card = this.state.global.inventory.cards.splice(idx, 1)[0]!;
+    slot.draftedDeck.push(card);
+    return true;
+  }
+
+  /**
+   * Move a card from draftedDeck → inventory. Returns false when the
+   * card isn't in the draft.
+   */
+  undraftCard(cardInstanceId: CardInstanceId): boolean {
+    const slot = this.requireCurrentSlot();
+    if (!slot.draftedDeck) return false;
+    const idx = slot.draftedDeck.findIndex(c => c.instanceId === cardInstanceId);
+    if (idx < 0) return false;
+    if (this.state.global.inventory.cards.length >= this.state.global.inventory.capacity) {
+      // No room to return → leave in draft (or could force back somehow)
+      return false;
+    }
+    const card = slot.draftedDeck.splice(idx, 1)[0]!;
+    this.state.global.inventory.cards.push(card);
+    return true;
+  }
+
   /**
    * Generate a dungeon map and enter the first node.
    * Pre-condition: current slot is 'inStartPhase' or 'atRest' (after rest).
-   * Starting deck must be provided by caller (came from prior session or
-   * "여정의 시작" event before this call).
+   *
+   * Deck resolution priority:
+   *   1. opts.deck if non-empty (explicit caller-provided deck)
+   *   2. slot.draftedDeck (cards drafted during start phase)
+   *   3. [] (empty — typically a new char before journey_start)
    */
   enterDungeon(opts: {
     /** Cards to start the run with. */
@@ -403,10 +469,21 @@ export class Game {
       void restNode;
     }
 
+    // Resolve starting deck: opts.deck (if non-empty) → draftedDeck → []
+    let startingDeck: CardInstance[];
+    if (opts.deck.length > 0) {
+      startingDeck = [...opts.deck];
+    } else if (slot.draftedDeck && slot.draftedDeck.length > 0) {
+      startingDeck = [...slot.draftedDeck];
+      slot.draftedDeck = [];
+    } else {
+      startingDeck = [];
+    }
+
     slot.state = 'inRun';
     this.state.run = {
       slotIndex: slot.slotIndex,
-      deck: [...opts.deck],
+      deck: startingDeck,
       gold: 0,
       map,
       activity: { kind: 'inMap' },
