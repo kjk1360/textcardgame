@@ -254,30 +254,49 @@ export function executeEffect(effect: Effect, ctx: ExecutionContext): EffectResu
 // Internals
 // ====================================================================
 
+/**
+ * Resolve targets symmetrically based on `ctx.source`:
+ *   - When source is the PLAYER: 'enemy' = ctx.target (picked from enemies),
+ *     'allEnemies' = all alive enemies, 'randomEnemy' = random alive enemy.
+ *   - When source is an ENEMY: 'enemy' = the player, 'allEnemies' = [player],
+ *     'randomEnemy' = the player (only opponent).
+ *   - 'self' = source.
+ *   - 'ally' = not yet implemented (returns []).
+ *   - 'none' / undefined = [].
+ */
 function resolveTargets(
   targetKind: TargetKind | undefined,
   ctx: ExecutionContext,
 ): Actor[] {
+  const src = ctx.source;
   switch (targetKind) {
     case 'self':
-      if (!ctx.source) throw new Error("Effect target 'self' requires ExecutionContext.source");
-      return [ctx.source];
-    case 'enemy':
-      if (!ctx.target) {
-        // No target picked — caller error or effect-on-no-enemy path.
-        return [];
+      if (!src) throw new Error("Effect target 'self' requires ExecutionContext.source");
+      return [src];
+    case 'enemy': {
+      if (src?.kind === 'enemy') {
+        // From enemy POV the "enemy" is the player.
+        return ctx.player.hp > 0 ? [ctx.player] : [];
       }
+      if (!ctx.target) return [];
       if (ctx.target.hp <= 0) return [];
       return [ctx.target];
-    case 'allEnemies':
+    }
+    case 'allEnemies': {
+      if (src?.kind === 'enemy') {
+        return ctx.player.hp > 0 ? [ctx.player] : [];
+      }
       return ctx.enemies.filter(e => e.hp > 0);
+    }
     case 'randomEnemy': {
-      const alive = ctx.enemies.filter(e => e.hp > 0);
-      if (alive.length === 0) return [];
-      return [ctx.rng.pick(alive)];
+      const opponents: Actor[] =
+        src?.kind === 'enemy'
+          ? (ctx.player.hp > 0 ? [ctx.player] : [])
+          : ctx.enemies.filter(e => e.hp > 0);
+      if (opponents.length === 0) return [];
+      return [ctx.rng.pick(opponents)];
     }
     case 'ally':
-      // Not yet implemented (no allies in the game)
       return [];
     case 'none':
     case undefined:

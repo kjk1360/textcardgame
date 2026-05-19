@@ -60,7 +60,50 @@ export interface EnemyActor extends ActorBase {
   readonly kind: 'enemy';
   readonly instanceId: string;
   readonly defId: EnemyId;
-  /** Intent state to be detailed when enemy AI is implemented. */
+  /**
+   * Currently telegraphed intent for the upcoming enemy turn.
+   * Computed by intent system; consumed when the enemy acts.
+   */
+  intent?: Intent;
+  /** Cursor for 'cycle' intent scripts. Treated as 0 when undefined. */
+  intentCursor?: number;
+  /** Last intent id (for 'scripted' chains). */
+  lastIntentId?: string;
+}
+
+/**
+ * Intent — what an enemy plans to do on its next turn.
+ * Has display metadata (UI shows "attack 12 ×2") and the actual effects
+ * to run when the intent fires.
+ */
+export interface Intent {
+  readonly id: string;
+  readonly display: IntentDisplay;
+  readonly effects: ReadonlyArray<import('./effect.js').Effect>;
+  /** Optional weight for 'weighted' scripts. */
+  readonly weight?: number;
+  /** For 'scripted' scripts: next intent id after this one fires. */
+  readonly nextIntentId?: string;
+}
+
+export interface IntentDisplay {
+  readonly kind: 'attack' | 'defend' | 'buff' | 'debuff' | 'unknown';
+  /** Headline number (e.g., attack 12). */
+  readonly value?: number;
+  /** Multi-hit indicator (e.g., ×3). */
+  readonly hits?: number;
+}
+
+/**
+ * IntentScript — how the enemy decides its next intent.
+ *
+ * - 'cycle': iterate through `intents[]` in order, wrapping at end.
+ * - 'weighted': uniform random pick by intent.weight per turn.
+ * - 'scripted': follow intent.nextIntentId chain explicitly.
+ */
+export interface IntentScript {
+  readonly mode: 'cycle' | 'weighted' | 'scripted';
+  readonly intents: ReadonlyArray<Intent>;
 }
 
 export type Actor = PlayerActor | EnemyActor;
