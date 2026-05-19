@@ -26,6 +26,10 @@ Thumbs.db
 *.swp
 *~
 
+# Claude Code / OMC plugin state (per-user, not project)
+.omc/
+.claude/
+
 # Env
 .env
 .env.local
