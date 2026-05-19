@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+
+# Build output (npm package용 dist는 release 시 publish, repo는 추적 안 함)
+dist/
+*.tsbuildinfo
+
+# Test output
+coverage/
+.nyc_output/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Excel temp lock files (디자이너 작업 중 임시)
+~$*.xlsx
+~$*.xls
+
+# Local save data (개발 시 로컬 테스트 세이브)
+.local-saves/
+
+# Distribution artifacts (배포 빌드 산출물 — repo에는 안 들어감)
+*.tgz
+*.zip
+release/
+artifacts/

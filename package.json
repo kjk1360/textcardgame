@@ -1,0 +1,51 @@
+{
+  "name": "textcrawlergame",
+  "version": "0.0.1",
+  "description": "Text-based TCG + RPG dungeon crawler. Card-farming meta-progression across characters via a shared dimensional warehouse.",
+  "bin": {
+    "crtgame": "./dist/cli.js"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "build:data": "tsx scripts/build-data.ts",
+    "dev": "tsx src/cli.tsx",
+    "start": "node dist/cli.js",
+    "test": "vitest run"
+  },
+  "files": [
+    "dist",
+    "src/data/generated",
+    "README.md"
+  ],
+  "keywords": [
+    "cli",
+    "tui",
+    "game",
+    "roguelike",
+    "deckbuilder",
+    "tcg"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "chokidar": "^5.0.0",
+    "env-paths": "^4.0.0",
+    "ink": "^7.0.3",
+    "js-yaml": "^4.1.1",
+    "react": "^19.2.6",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^25.9.0",
+    "@types/react": "^19.2.14",
+    "@vitest/ui": "^4.1.6",
+    "tsx": "^4.22.2",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
+  }
+}
