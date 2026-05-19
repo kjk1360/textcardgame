@@ -6,3 +6,4 @@ export * from './condition.js';
 export * from './run.js';
 export * from './combat.js';
 export * from './status.js';
+export * from './map.js';
