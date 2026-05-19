@@ -42,6 +42,45 @@ import {
 import type { GameRegistries } from './registries.js';
 import { evalCondition, type ConditionContext } from '../conditions/evaluator.js';
 import type { ExecutionContext } from '../effects/executor.js';
+import { sampleCardsFromPool } from '../cards/pool-sampler.js';
+import type { CardPoolId } from '../../types/index.js';
+
+/**
+ * Convention: the event id that always plays as the first node of a new
+ * run when present in the registry. Data-driven later — for now a constant
+ * matches the design (여정의 시작).
+ */
+const STARTING_EVENT_ID = 'journey_start' as EventId;
+
+/**
+ * Card pool id used for combat-end card rewards. If not present in the
+ * registry, the reward screen offers no card pick (just gold).
+ */
+const POST_COMBAT_REWARD_POOL_ID = 'pool_start_cards' as CardPoolId;
+const POST_COMBAT_REWARD_COUNT = 3;
+
+/** Version of the persisted save shape — bump on incompatible changes. */
+export const SERIALIZATION_VERSION = 1;
+
+export interface SerializedSession {
+  schemaVersion: number;
+  global: {
+    gold: number;
+    inventory: { capacity: number; cards: CardInstance[] };
+    passiveSkills: SkillId[];
+    eventsCleared: EventId[];
+    difficultyMaxReached: number;
+  };
+  slots: ReadonlyArray<{
+    slotIndex: number;
+    characterName?: string;
+    difficultyLevel: number;
+    character?: PlayerActor;
+    skillIds: SkillId[];
+    state: 'empty' | 'atRest';
+    pendingDeck?: CardInstance[];
+  }>;
+}
 
 /**
  * Game — the top-level facade.
@@ -100,6 +139,8 @@ export interface RunSessionState {
   slotIndex: number;
   /** Single-source-of-truth deck outside combat. */
   deck: CardInstance[];
+  /** Run-local gold (enemy drops, event rewards). Converts to meta gold at rest. */
+  gold: number;
   map: MapState;
   activity: RunActivity;
 }
@@ -114,6 +155,25 @@ export type RunActivity =
       turn: number;
       /** Carries the flow runtime when combat was initiated via a combatStart step. */
       resumingFlow?: { runtime: FlowRuntime; eventId: EventId };
+    }
+  | {
+      kind: 'rewardPick';
+      /** CardDefIds offered as combat-end reward (pick 1 or skip). */
+      choices: ReadonlyArray<import('../../types/index.js').CardDefId>;
+      /** Gold earned from the combat. Already added to run.gold; shown for UX. */
+      goldEarned: number;
+      /** Carry-through flow context if combat was launched mid-flow. */
+      resumingFlow?: { runtime: FlowRuntime; eventId: EventId };
+    }
+  | {
+      kind: 'gameOver';
+      /** Summary shown on the death screen. */
+      reason: 'died-in-combat' | 'died-other';
+      runStatsSnapshot: {
+        difficultyReached: number;
+        nodesVisited: number;
+        cardsCarried: number;
+      };
     };
 
 // ====================================================================
@@ -160,6 +220,76 @@ export class Game {
     this.difficultyTable = opts.difficulty ?? makeDefaultDifficultyTable();
     this.rng = makeRng(opts.rngSeed ?? `game-${Date.now()}`);
     this.state = createInitialState();
+  }
+
+  // ====================================================================
+  // Serialization (for auto-save)
+  // ====================================================================
+  //
+  // v1 strategy: save only between runs (slot.state === 'empty' | 'atRest').
+  // Slots that are inStartPhase / inRun are downgraded to atRest on save —
+  // the in-flight run state itself doesn't persist. Player respawns at the
+  // rest hub on next load.
+  //
+  // Schema versioning: bump SERIALIZATION_VERSION whenever the shape
+  // changes; add a migration in the deserialize() switch.
+
+  serialize(): SerializedSession {
+    return {
+      schemaVersion: SERIALIZATION_VERSION,
+      global: {
+        gold: this.state.global.gold,
+        inventory: this.state.global.inventory,
+        passiveSkills: this.state.global.passiveSkills,
+        eventsCleared: [...this.state.global.eventsCleared],
+        difficultyMaxReached: this.state.global.difficultyMaxReached,
+      },
+      slots: this.state.slots.map(s => {
+        // Downgrade inStartPhase/inRun → atRest with whatever character data exists
+        const stableState: 'empty' | 'atRest' =
+          s.state === 'empty' ? 'empty' : 'atRest';
+        return {
+          slotIndex: s.slotIndex,
+          characterName: s.characterName,
+          difficultyLevel: s.difficultyLevel,
+          character: s.character,
+          skillIds: s.skillIds,
+          state: stableState,
+          pendingDeck: ((s as any).pendingDeck as CardInstance[] | undefined) ?? [],
+        };
+      }),
+    };
+  }
+
+  deserialize(json: SerializedSession): void {
+    if (json.schemaVersion !== SERIALIZATION_VERSION) {
+      throw new Error(`Save schema v${json.schemaVersion} != current v${SERIALIZATION_VERSION}`);
+    }
+    this.state = {
+      global: {
+        gold: json.global.gold,
+        inventory: { ...json.global.inventory },
+        passiveSkills: [...json.global.passiveSkills],
+        eventsCleared: new Set(json.global.eventsCleared),
+        difficultyMaxReached: json.global.difficultyMaxReached,
+      },
+      slots: json.slots.map(s => {
+        const slot: SlotData = {
+          slotIndex: s.slotIndex,
+          characterName: s.characterName,
+          difficultyLevel: s.difficultyLevel,
+          state: s.state,
+          character: s.character,
+          skillIds: [...s.skillIds],
+        };
+        if (s.pendingDeck && s.pendingDeck.length > 0) {
+          (slot as any).pendingDeck = [...s.pendingDeck];
+        }
+        return slot;
+      }),
+      currentSlotIndex: null,
+      run: null,
+    };
   }
 
   // ====================================================================
@@ -224,6 +354,11 @@ export class Game {
     deck: ReadonlyArray<CardInstance>;
     /** Optional override of map dimensions. */
     map?: { width?: number; height?: number; startKey?: string; restKey?: string };
+    /** Override the start-node event. Defaults to STARTING_EVENT_ID if present. */
+    startEventId?: EventId;
+    /** When true, skips all map content seeding (events + enemy groups).
+     *  Tests use this to install fully manual content. */
+    skipContentSeed?: boolean;
   }): void {
     const slot = this.requireCurrentSlot();
     const map = generateMap({
@@ -258,12 +393,58 @@ export class Game {
     this.state.run = {
       slotIndex: slot.slotIndex,
       deck: [...opts.deck],
+      gold: 0,
       map,
       activity: { kind: 'inMap' },
     };
 
+    // Seed events + enemy groups onto map nodes (unless caller opts out)
+    if (!opts.skipContentSeed) {
+      this.seedMapContent(opts.startEventId);
+    }
+
     // Trigger first node event if it's an event node
     this.maybeTriggerCurrentNodeEvent();
+  }
+
+  /**
+   * Post-process generated map to assign concrete eventIds and
+   * enemyGroupIds. Uses registries' `.all()` for random pick.
+   */
+  private seedMapContent(startEventOverride?: EventId): void {
+    const run = this.requireRun();
+    const startNode = run.map.nodes[run.map.currentNodeKey]!;
+
+    // Start node gets the configured starting event (default: journey_start
+    // if it exists in the registry).
+    const starterId = startEventOverride
+      ?? (this.registries.events.has(STARTING_EVENT_ID) ? STARTING_EVENT_ID : null);
+    if (starterId) {
+      startNode.eventId = starterId;
+      const ev = this.registries.events.get(starterId);
+      startNode.nodeType = ev.nodeType;
+    }
+
+    // Assign content to other nodes
+    const enemyGroups = this.registries.enemyGroups.all();
+    const events = this.registries.events.all().filter(e =>
+      e.id !== starterId && !(e.oneShot && this.state.global.eventsCleared.has(e.id))
+    );
+
+    for (const node of Object.values(run.map.nodes)) {
+      if (node === startNode) continue;
+      if (node.nodeType === 'rest') continue;
+      if (node.nodeType.startsWith('combat')) {
+        if (!node.enemyGroupId && enemyGroups.length > 0) {
+          node.enemyGroupId = this.rng.pick(enemyGroups).id;
+        }
+      } else if (node.nodeType.startsWith('event')) {
+        if (!node.eventId && events.length > 0) {
+          node.eventId = this.rng.pick(events).id;
+        }
+      }
+      // shop / treasure / unknown — left unhandled for now
+    }
   }
 
   // ====================================================================
@@ -428,6 +609,8 @@ export class Game {
     if (run.activity.kind === 'inCombat') {
       run.deck = this.collectAllPilesToDeck(run.deck, run.activity.piles);
     }
+    // Convert run gold → meta gold
+    this.state.global.gold += run.gold;
     slot.difficultyLevel++;
     slot.state = 'atRest';
     // Stash deck on slot for rest-hub UI to display + manage
@@ -599,32 +782,117 @@ export class Game {
     const slot = this.requireCurrentSlot();
     if (run.activity.kind !== 'inCombat') return outcome;
 
+    // Snapshot before piles get reset
+    const enemies = run.activity.enemies;
+    const resumingFlow = run.activity.resumingFlow;
+
     // Collect piles back to run deck
     run.deck = this.collectAllPilesToDeck(run.deck, run.activity.piles);
 
     if (outcome === 'lost') {
-      // Character death — wipe slot, keep global
-      this.deleteSlot(slot.slotIndex);
+      // Switch to game-over screen so UI can show the death summary.
+      // The actual slot wipe happens when the UI acknowledges via
+      // acknowledgeGameOver().
+      run.activity = {
+        kind: 'gameOver',
+        reason: 'died-in-combat',
+        runStatsSnapshot: {
+          difficultyReached: slot.difficultyLevel,
+          nodesVisited: run.map.visitedNodeKeys.size,
+          cardsCarried: run.deck.length,
+        },
+      };
       return outcome;
     }
 
-    // Won — give rewards (gold only for now; card reward needs Reward Screen integration)
+    // Won — calculate gold reward and stage card-pick state.
+    let goldEarned = 0;
+    for (const enemy of enemies) {
+      const def = this.registries.enemies.get(enemy.defId);
+      if (def.rewards?.goldRange) {
+        goldEarned += this.rng.intBetween(def.rewards.goldRange[0], def.rewards.goldRange[1]);
+      }
+    }
+    run.gold += goldEarned;
+
+    // Sample card choices from the post-combat reward pool
+    let choices: ReadonlyArray<CardDefId> = [];
+    if (this.registries.cardPools.has(POST_COMBAT_REWARD_POOL_ID)) {
+      const pool = this.registries.cardPools.get(POST_COMBAT_REWARD_POOL_ID)!;
+      choices = sampleCardsFromPool(pool, POST_COMBAT_REWARD_COUNT, this.rng);
+    }
+
+    run.activity = {
+      kind: 'rewardPick',
+      choices,
+      goldEarned,
+      resumingFlow,
+    };
+
+    return outcome;
+  }
+
+  // ====================================================================
+  // Reward pick (post-combat)
+  // ====================================================================
+
+  /**
+   * Take a chosen reward card (or null for skip), then resume to map
+   * or to the paused flow.
+   */
+  rewardPickCard(cardDefId: CardDefId | null): void {
+    const run = this.requireRun();
+    if (run.activity.kind !== 'rewardPick') {
+      throw new Error('rewardPickCard called outside rewardPick activity');
+    }
+    if (cardDefId !== null) {
+      if (!run.activity.choices.includes(cardDefId)) {
+        throw new Error(`Card ${cardDefId} not in reward choices`);
+      }
+      const card: CardInstance = {
+        instanceId: randomUUID() as CardInstanceId,
+        defId: cardDefId,
+        modifiers: [],
+        acquired: { kind: 'reward', runId: String(run.slotIndex) },
+      };
+      run.deck.push(card);
+    }
+    this.finishReward();
+  }
+
+  rewardSkip(): void {
+    const run = this.requireRun();
+    if (run.activity.kind !== 'rewardPick') {
+      throw new Error('rewardSkip called outside rewardPick activity');
+    }
+    this.finishReward();
+  }
+
+  private finishReward(): void {
+    const run = this.requireRun();
+    if (run.activity.kind !== 'rewardPick') return;
     const resumingFlow = run.activity.resumingFlow;
     run.activity = { kind: 'inMap' };
-
     if (resumingFlow) {
-      // Resume the flow that initiated combat
-      const status = resumingFlow.runtime.combatResolved(
-        outcome === 'won' ? 'won' : 'lost',
-        this.buildFlowCtx(),
-      );
+      const status = resumingFlow.runtime.combatResolved('won', this.buildFlowCtx());
       run.activity = { kind: 'inEvent', eventId: resumingFlow.eventId, runtime: resumingFlow.runtime };
       if (status.kind === 'finished') {
         this.finishEvent(resumingFlow.eventId);
       }
     }
+  }
 
-    return outcome;
+  // ====================================================================
+  // Game over acknowledgement
+  // ====================================================================
+
+  /**
+   * Player saw the death summary — now actually wipe the slot.
+   * Global state (gold/inventory/passives) is preserved.
+   */
+  acknowledgeGameOver(): void {
+    const slot = this.requireCurrentSlot();
+    this.deleteSlot(slot.slotIndex);
   }
 
   private collectAllPilesToDeck(deck: CardInstance[], piles: PlayerCombatState): CardInstance[] {
@@ -656,7 +924,7 @@ export class Game {
         player: {
           hp: slot.character!.hp,
           maxHp: slot.character!.maxHp,
-          gold: 0, // run gold not yet tracked separately — TBD
+          gold: run.gold,
           deck: run.deck,
           skillIds: slot.skillIds,
         },
@@ -678,7 +946,7 @@ export class Game {
       statuses: this.registries.statuses,
       rng: this.rng,
       constants: this.constants,
-      run: { gold: 0 },
+      run: run,
     };
     const host = new FlowHostImpl({
       cards: this.registries.cards,
@@ -707,7 +975,8 @@ export class Game {
       statuses: this.registries.statuses,
       rng: this.rng,
       constants: this.constants,
-      run: { gold: 0 }, // run gold TBD
+      // Point at the run's actual gold holder so loseGold/gainGold mutate it.
+      run: run,
     };
   }
 
@@ -722,7 +991,7 @@ export class Game {
       statuses: this.registries.statuses,
       rng: this.rng,
       constants: this.constants,
-      run: { gold: 0 },
+      run: run,
     };
   }
 

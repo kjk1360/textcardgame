@@ -285,7 +285,9 @@ describe('Game — end-to-end cycle', () => {
         break;
       }
     }
-    // Combat should end with victory and activity back to inMap
+    // Combat won → reward pick screen; skip to return to map
+    expect(run.activity.kind).toBe('rewardPick');
+    game.rewardSkip();
     expect(run.activity.kind).toBe('inMap');
 
     // ---- Move to rest node to end run ----
@@ -346,8 +348,8 @@ describe('Game — end-to-end cycle', () => {
       acquired: { kind: 'starter' },
     } as CardInstance);
 
-    // Enter dungeon
-    game.enterDungeon({ deck: [] });
+    // Enter dungeon — skip auto content seed so we control nodes exactly
+    game.enterDungeon({ deck: [], skipContentSeed: true });
     const run = game.state.run!;
 
     // Force combat with overwhelming enemy
@@ -364,10 +366,12 @@ describe('Game — end-to-end cycle', () => {
 
     // Kill the player manually
     game.state.slots[0]!.character!.hp = 0;
-    // Trigger combat end check
+    // Trigger combat end check → game-over state
     game.combatEndTurn();
+    expect(run.activity.kind).toBe('gameOver');
 
-    // Slot should be wiped, global preserved
+    // UI acknowledgement wipes the slot
+    game.acknowledgeGameOver();
     expect(game.state.slots[0]!.state).toBe('empty');
     expect(game.state.global.gold).toBe(500);
     expect(game.state.global.inventory.cards).toHaveLength(1);

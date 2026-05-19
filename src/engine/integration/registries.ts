@@ -50,14 +50,17 @@ export interface EnemyGroupDefinition {
 export interface EnemyRegistry {
   get(id: EnemyId): EnemyDefinition;
   has(id: EnemyId): boolean;
+  all(): ReadonlyArray<EnemyDefinition>;
 }
 export interface EnemyGroupRegistry {
   get(id: EnemyGroupId): EnemyGroupDefinition;
   has(id: EnemyGroupId): boolean;
+  all(): ReadonlyArray<EnemyGroupDefinition>;
 }
 export interface EventRegistry {
   get(id: EventId): EventDefinition;
   has(id: EventId): boolean;
+  all(): ReadonlyArray<EventDefinition>;
 }
 export interface FlowRegistry {
   get(id: ScenarioId): FlowDefinition;
@@ -88,8 +91,9 @@ export interface GameRegistries {
 
 export function makeMapRegistry<K, V>(
   entries: ReadonlyArray<[K, V]>,
-): { get(id: K): V; has(id: K): boolean } {
+): { get(id: K): V; has(id: K): boolean; all(): ReadonlyArray<V> } {
   const map = new Map(entries);
+  const list = entries.map(([, v]) => v);
   return {
     get(id) {
       const v = map.get(id);
@@ -97,6 +101,7 @@ export function makeMapRegistry<K, V>(
       return v;
     },
     has(id) { return map.has(id); },
+    all() { return list; },
   };
 }
 

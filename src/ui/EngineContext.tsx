@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useReducer } from 'react';
+import React, { createContext, useCallback, useContext, useReducer, useRef } from 'react';
 import type { Game } from '../engine/integration/game.js';
 
 /**
@@ -8,29 +8,33 @@ import type { Game } from '../engine/integration/game.js';
  * when game.state changes — provided here as `dispatch`, a function
  * that wraps an action and forces a re-render afterward.
  *
- * Usage:
- *   const game = useGame();
- *   const dispatch = useDispatch();
- *   dispatch(() => game.createCharacter(0, 'Hero'));
+ * Auto-save: when `onAfterDispatch` is provided to <EngineProvider>,
+ * it's invoked after every successful dispatch. Wire it to a debounced
+ * file write to persist the game.
  */
 
 interface EngineCtxValue {
   readonly game: Game;
   readonly rerender: () => void;
+  readonly onAfterDispatch?: (game: Game) => void;
 }
 
 const EngineContext = createContext<EngineCtxValue | null>(null);
 
 export function EngineProvider({
   game,
+  onAfterDispatch,
   children,
 }: {
   game: Game;
+  onAfterDispatch?: (game: Game) => void;
   children: React.ReactNode;
 }): React.ReactElement {
   const [, rerender] = useReducer(x => x + 1, 0);
-  const value: EngineCtxValue = { game, rerender };
-  return <EngineContext.Provider value={value}>{children}</EngineContext.Provider>;
+  const valueRef = useRef<EngineCtxValue>({ game, rerender, onAfterDispatch });
+  // Keep the ref up-to-date with the latest callback (without re-creating)
+  valueRef.current = { game, rerender, onAfterDispatch };
+  return <EngineContext.Provider value={valueRef.current}>{children}</EngineContext.Provider>;
 }
 
 export function useGame(): Game {
@@ -41,10 +45,8 @@ export function useGame(): Game {
 
 /**
  * Returns a `dispatch` function. Call it with a side-effecting closure
- * that mutates the game; the tree re-renders after the closure returns.
- *
- * Caught errors are surfaced as a thrown — UI should be defensive
- * about transitions it requests.
+ * that mutates the game; the tree re-renders + auto-save fires after
+ * the closure returns.
  */
 export function useDispatch(): (action: () => void) => void {
   const ctx = useContext(EngineContext);
@@ -52,5 +54,14 @@ export function useDispatch(): (action: () => void) => void {
   return useCallback((action: () => void) => {
     action();
     ctx.rerender();
+    if (ctx.onAfterDispatch) {
+      try {
+        ctx.onAfterDispatch(ctx.game);
+      } catch (e) {
+        // Save failure shouldn't crash gameplay — log + continue
+        // eslint-disable-next-line no-console
+        console.error('Auto-save failed:', e);
+      }
+    }
   }, [ctx]);
 }

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Box, Text, useApp } from 'ink';
+import { join } from 'node:path';
 import { EngineProvider, useGame } from './EngineContext.js';
 import { TitleScreen } from './screens/TitleScreen.js';
 import { SlotMenuScreen } from './screens/SlotMenuScreen.js';
@@ -9,8 +10,12 @@ import { MapScreen } from './screens/MapScreen.js';
 import { EventScreen } from './screens/EventScreen.js';
 import { CombatScreen } from './screens/CombatScreen.js';
 import { RestHubScreen } from './screens/RestHubScreen.js';
-import { Game } from '../engine/integration/game.js';
+import { RewardScreen } from './screens/RewardScreen.js';
+import { DeathScreen } from './screens/DeathScreen.js';
+import { Game, type SerializedSession } from '../engine/integration/game.js';
 import { makeDemoRegistries } from '../data/demo.js';
+import { makeSavePaths } from '../save/paths.js';
+import { readResilientJson, writeAtomicJson } from '../save/atomic.js';
 
 /**
  * App — top-level router.
@@ -27,14 +32,35 @@ type Screen =
   | { kind: 'newCharacter'; slotIndex: number }
   | { kind: 'playing'; slotIndex: number };
 
-export function App(): React.ReactElement {
-  const [game] = useState(() => new Game({
+const SAVE_FILE = join(makeSavePaths().root, 'session.json');
+
+function loadOrCreateGame(): Game {
+  const game = new Game({
     registries: makeDemoRegistries(),
     rngSeed: `demo-${Date.now()}`,
-  }));
+  });
+  try {
+    const raw = readResilientJson<SerializedSession>(SAVE_FILE);
+    if (raw) {
+      game.deserialize(raw.value);
+    }
+  } catch (e) {
+    // Bad save → start fresh (game state already initialized in ctor)
+    // eslint-disable-next-line no-console
+    console.error('Failed to load save, starting fresh:', e);
+  }
+  return game;
+}
+
+function persist(game: Game): void {
+  writeAtomicJson(SAVE_FILE, game.serialize());
+}
+
+export function App(): React.ReactElement {
+  const [game] = useState(loadOrCreateGame);
 
   return (
-    <EngineProvider game={game}>
+    <EngineProvider game={game} onAfterDispatch={persist}>
       <Router />
     </EngineProvider>
   );
@@ -124,9 +150,11 @@ function PlayingRouter({
       return <Text color="red">Inconsistent state: inRun but no run object</Text>;
     }
     switch (run.activity.kind) {
-      case 'inMap':    return <MapScreen />;
-      case 'inEvent':  return <EventScreen />;
-      case 'inCombat': return <CombatScreen />;
+      case 'inMap':      return <MapScreen />;
+      case 'inEvent':    return <EventScreen />;
+      case 'inCombat':   return <CombatScreen />;
+      case 'rewardPick': return <RewardScreen />;
+      case 'gameOver':   return <DeathScreen onAcknowledged={onBackToTitle} />;
     }
   }
 
