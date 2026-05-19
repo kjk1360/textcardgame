@@ -59,6 +59,13 @@ const STARTING_EVENT_ID = 'journey_start' as EventId;
 const POST_COMBAT_REWARD_POOL_ID = 'pool_start_cards' as CardPoolId;
 const POST_COMBAT_REWARD_COUNT = 3;
 
+/** Standard event ids for non-combat node types. */
+const SHOP_EVENT_ID = 'shop_default' as EventId;
+const TREASURE_EVENT_ID = 'treasure_default' as EventId;
+
+/** Fallback gold when final-boss victory yields no eligible skill to promote. */
+const FINAL_BOSS_FALLBACK_GOLD = 5000;
+
 /** Version of the persisted save shape — bump on incompatible changes. */
 export const SERIALIZATION_VERSION = 1;
 
@@ -174,6 +181,13 @@ export type RunActivity =
         nodesVisited: number;
         cardsCarried: number;
       };
+    }
+  | {
+      kind: 'passivePromote';
+      /** Eligible skills the player can promote to global passive.
+       *  Empty array → no eligible skill; player gets fallbackGold instead. */
+      candidates: ReadonlyArray<SkillId>;
+      fallbackGold?: number;
     };
 
 // ====================================================================
@@ -413,12 +427,17 @@ export class Game {
    */
   private seedMapContent(startEventOverride?: EventId): void {
     const run = this.requireRun();
+    const slot = this.requireCurrentSlot();
     const startNode = run.map.nodes[run.map.currentNodeKey]!;
 
-    // Start node gets the configured starting event (default: journey_start
-    // if it exists in the registry).
+    // Start node event:
+    //   - If caller passed an explicit override, use it.
+    //   - Otherwise default to journey_start ONLY on the character's first
+    //     run (difficultyLevel === 0). Returning characters from rest just
+    //     start in the empty start node.
+    const isFirstRun = slot.difficultyLevel === 0;
     const starterId = startEventOverride
-      ?? (this.registries.events.has(STARTING_EVENT_ID) ? STARTING_EVENT_ID : null);
+      ?? (isFirstRun && this.registries.events.has(STARTING_EVENT_ID) ? STARTING_EVENT_ID : null);
     if (starterId) {
       startNode.eventId = starterId;
       const ev = this.registries.events.get(starterId);
@@ -442,8 +461,15 @@ export class Game {
         if (!node.eventId && events.length > 0) {
           node.eventId = this.rng.pick(events).id;
         }
+      } else if (node.nodeType === 'shop') {
+        if (!node.eventId && this.registries.events.has(SHOP_EVENT_ID)) {
+          node.eventId = SHOP_EVENT_ID;
+        }
+      } else if (node.nodeType === 'treasure') {
+        if (!node.eventId && this.registries.events.has(TREASURE_EVENT_ID)) {
+          node.eventId = TREASURE_EVENT_ID;
+        }
       }
-      // shop / treasure / unknown — left unhandled for now
     }
   }
 
@@ -473,6 +499,23 @@ export class Game {
     // Trigger event on first entry
     if (attempt.newlyEntered) {
       this.maybeTriggerCurrentNodeEvent();
+    }
+    // Auto dead-end recovery: if no movable neighbors after this move,
+    // spawn an elite + revive a path to a previously-visited node.
+    // (Only applies when we're still in map mode — events / combat may
+    // have started.)
+    if (this.state.run?.activity.kind === 'inMap' && isDeadEnd(run.map)) {
+      const recovery = recoverDeadEnd(run.map, this.rng);
+      // Seed the new elite node's enemy group if one was promoted
+      if (recovery && recovery.elitizedNodeKey) {
+        const elite = run.map.nodes[recovery.elitizedNodeKey];
+        if (elite && !elite.enemyGroupId) {
+          const groups = this.registries.enemyGroups.all();
+          if (groups.length > 0) {
+            elite.enemyGroupId = this.rng.pick(groups).id;
+          }
+        }
+      }
     }
     return attempt;
   }
@@ -805,7 +848,35 @@ export class Game {
       return outcome;
     }
 
-    // Won — calculate gold reward and stage card-pick state.
+    // Final boss check — if the current node is the boss AND we're at
+    // max difficulty, route to the passive-promote screen instead of
+    // the standard reward.
+    const currentNode = run.map.nodes[run.map.currentNodeKey]!;
+    const isFinalBossKill =
+      currentNode.nodeType === ('combat_boss' as typeof currentNode.nodeType) &&
+      isAtFinalDifficulty(this.difficultyTable, slot.difficultyLevel);
+
+    if (isFinalBossKill) {
+      this.state.global.difficultyMaxReached = Math.max(
+        this.state.global.difficultyMaxReached,
+        slot.difficultyLevel + 1,
+      );
+      const candidates = this.eligiblePassiveCandidates(slot.skillIds);
+      if (candidates.length === 0) {
+        // No eligible skill → fallback gold
+        this.state.global.gold += FINAL_BOSS_FALLBACK_GOLD;
+        run.activity = {
+          kind: 'passivePromote',
+          candidates: [],
+          fallbackGold: FINAL_BOSS_FALLBACK_GOLD,
+        };
+      } else {
+        run.activity = { kind: 'passivePromote', candidates };
+      }
+      return outcome;
+    }
+
+    // Standard victory — calculate gold reward and stage card-pick state.
     let goldEarned = 0;
     for (const enemy of enemies) {
       const def = this.registries.enemies.get(enemy.defId);
@@ -830,6 +901,40 @@ export class Game {
     };
 
     return outcome;
+  }
+
+  /**
+   * Resolve passive promotion. Pass a skillId from the candidates array
+   * (or null to take the fallback / no-op). Either way, the character
+   * retires — slot is wiped and the player returns to title.
+   */
+  choosePassivePromote(skillId: SkillId | null): void {
+    const run = this.requireRun();
+    if (run.activity.kind !== 'passivePromote') {
+      throw new Error('choosePassivePromote called outside passivePromote');
+    }
+    if (skillId !== null) {
+      if (!run.activity.candidates.includes(skillId)) {
+        throw new Error(`Skill ${skillId} not in passive candidates`);
+      }
+      this.state.global.passiveSkills.push(skillId);
+    }
+    // Character retires after the final boss — wipe slot, return to title.
+    const slot = this.requireCurrentSlot();
+    this.deleteSlot(slot.slotIndex);
+  }
+
+  /** Helper: filter character skills down to those that can be promoted. */
+  private eligiblePassiveCandidates(characterSkillIds: ReadonlyArray<SkillId>): SkillId[] {
+    const out: SkillId[] = [];
+    for (const sid of characterSkillIds) {
+      if (this.state.global.passiveSkills.includes(sid)) continue;
+      if (!this.registries.skills.has(sid)) continue;
+      const def = this.registries.skills.get(sid);
+      if (!def.passiveEligible) continue;
+      out.push(sid);
+    }
+    return out;
   }
 
   // ====================================================================

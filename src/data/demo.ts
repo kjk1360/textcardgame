@@ -270,6 +270,86 @@ export const FLOW_JOURNEY_START: FlowDefinition = {
   },
 };
 
+// ---------- Shop ----------
+
+export const EVENT_SHOP: EventDefinition = {
+  id: id<EventId>('shop_default'),
+  name: '차원 상인',
+  nodeType: 'shop' as any,
+  flowId: id<ScenarioId>('scenario_shop'),
+};
+
+export const FLOW_SHOP: FlowDefinition = {
+  id: id<ScenarioId>('scenario_shop'),
+  entryStepId: 'open',
+  steps: {
+    open: {
+      kind: 'dialogue', speaker: '차원 상인',
+      text: '재미있는 카드가 있다네. 보겠는가?',
+      next: 'menu',
+    },
+    menu: {
+      kind: 'choice',
+      prompt: '무엇을 하겠는가?',
+      options: [
+        {
+          label: '카드 1장 보기 (50G)',
+          condition: { kind: 'hasGold', min: 50 },
+          effects: [{ kind: 'loseGold', amount: 50 }],
+          next: 'cards',
+        },
+        { label: '떠난다', next: 'end' },
+      ],
+    },
+    cards: {
+      kind: 'cardOffer',
+      poolId: POOL_START_CARDS.id,
+      picksPerIteration: 3,
+      iterations: 1,
+      destination: 'currentDeck',
+      allowSkip: true,
+      next: 'end',
+    },
+    end: { kind: 'end', outcome: 'success' },
+  },
+};
+
+// ---------- Treasure ----------
+
+export const EVENT_TREASURE: EventDefinition = {
+  id: id<EventId>('treasure_default'),
+  name: '차원의 보물',
+  nodeType: 'treasure' as any,
+  flowId: id<ScenarioId>('scenario_treasure'),
+};
+
+export const FLOW_TREASURE: FlowDefinition = {
+  id: id<ScenarioId>('scenario_treasure'),
+  entryStepId: 'open',
+  steps: {
+    open: {
+      kind: 'dialogue',
+      text: '보물 상자를 발견했다!',
+      next: 'gold',
+    },
+    gold: {
+      kind: 'applyEffect',
+      effects: [{ kind: 'gainGold', amount: 30 }],
+      next: 'card_offer',
+    },
+    card_offer: {
+      kind: 'cardOffer',
+      poolId: POOL_START_CARDS.id,
+      picksPerIteration: 3,
+      iterations: 1,
+      destination: 'currentDeck',
+      allowSkip: true,
+      next: 'end',
+    },
+    end: { kind: 'end', outcome: 'success' },
+  },
+};
+
 // ====================================================================
 // Bundle
 // ====================================================================
@@ -285,7 +365,7 @@ export function makeDemoRegistries(): GameRegistries {
     skillBoxes: makeSkillBoxRegistryFromList([SKILL_BOX_LOWEST]),
     enemies: makeEnemyRegistry([ENEMY_SLIME, ENEMY_BRUTE]),
     enemyGroups: makeEnemyGroupRegistry([GROUP_SLIME_SOLO, GROUP_BRUTE_SOLO]),
-    events: makeEventRegistry([EVENT_JOURNEY_START]),
-    flows: makeFlowRegistry([FLOW_JOURNEY_START]),
+    events: makeEventRegistry([EVENT_JOURNEY_START, EVENT_SHOP, EVENT_TREASURE]),
+    flows: makeFlowRegistry([FLOW_JOURNEY_START, FLOW_SHOP, FLOW_TREASURE]),
   };
 }

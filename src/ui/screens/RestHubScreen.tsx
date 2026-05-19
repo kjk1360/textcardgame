@@ -90,9 +90,9 @@ function RestMenu({
                     dispatch(() => {
                       // Auto-sell anything remaining undeposited
                       game.restAutoSellPendingDeck();
-                      // For now: enter new dungeon with empty deck (tied to inventory recovery later)
-                      // Inventory cards will be available in next event via dimensional warehouse
-                      game.enterDungeon({ deck: [] });
+                      // Route through start phase so player can buy a skill box
+                      // before entering. StartPhaseScreen will call enterDungeon.
+                      slot.state = 'inStartPhase';
                     });
                     break;
                   case 'title':

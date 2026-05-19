@@ -12,6 +12,7 @@ import { CombatScreen } from './screens/CombatScreen.js';
 import { RestHubScreen } from './screens/RestHubScreen.js';
 import { RewardScreen } from './screens/RewardScreen.js';
 import { DeathScreen } from './screens/DeathScreen.js';
+import { PassivePromoteScreen } from './screens/PassivePromoteScreen.js';
 import { Game, type SerializedSession } from '../engine/integration/game.js';
 import { makeDemoRegistries } from '../data/demo.js';
 import { makeSavePaths } from '../save/paths.js';
@@ -150,11 +151,12 @@ function PlayingRouter({
       return <Text color="red">Inconsistent state: inRun but no run object</Text>;
     }
     switch (run.activity.kind) {
-      case 'inMap':      return <MapScreen />;
-      case 'inEvent':    return <EventScreen />;
-      case 'inCombat':   return <CombatScreen />;
-      case 'rewardPick': return <RewardScreen />;
-      case 'gameOver':   return <DeathScreen onAcknowledged={onBackToTitle} />;
+      case 'inMap':         return <MapScreen />;
+      case 'inEvent':       return <EventScreen />;
+      case 'inCombat':      return <CombatScreen />;
+      case 'rewardPick':    return <RewardScreen />;
+      case 'gameOver':      return <DeathScreen onAcknowledged={onBackToTitle} />;
+      case 'passivePromote':return <PassivePromoteScreen onCompleted={onBackToTitle} />;
     }
   }
 
