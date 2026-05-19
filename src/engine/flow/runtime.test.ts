@@ -353,36 +353,405 @@ describe('FlowRuntime — auto-advancing steps', () => {
 });
 
 // ====================================================================
-// deferred kinds
+// Host-driven step kinds
 // ====================================================================
 
-describe('FlowRuntime — deferred step kinds', () => {
-  const deferredKinds: Array<[string, any]> = [
-    ['cardOffer', { kind: 'cardOffer', poolId: 'p', picksPerIteration: 3, iterations: 1, destination: 'currentDeck', next: 'end' }],
-    ['skillOffer', { kind: 'skillOffer', count: 3, next: 'end' }],
-    ['cardUpgrade', { kind: 'cardUpgrade', source: 'currentDeck', count: 1, next: 'end' }],
-    ['cardModifierAttach', { kind: 'cardModifierAttach', cardInstanceSelector: 'choose', modifierId: id<any>('m'), next: 'end' }],
-    ['combatStart', { kind: 'combatStart', enemyGroupId: id<any>('eg'), afterVictoryNext: 'end' }],
-  ];
+// Reusable mock host that records calls so tests can assert against it.
+import type { FlowHost } from './host.js';
+import type { CardDefId, CardInstance, CardInstanceId, EnemyGroupId, ModifierId } from '../../types/index.js';
 
-  for (const [kindName, stepData] of deferredKinds) {
-    it(`${kindName} → awaitingDeferred`, () => {
-      const flow: FlowDefinition = {
-        id: id<ScenarioId>('d-' + kindName),
-        entryStepId: 's',
-        steps: {
-          s: stepData,
-          end: { kind: 'end' },
-        },
+function makeMockHost(opts: {
+  poolCards?: ReadonlyArray<CardDefId>;
+  skillsForOffer?: ReadonlyArray<SkillId>;
+  upgradeCandidates?: ReadonlyArray<CardInstance>;
+  modifierChoices?: ReadonlyArray<ModifierId>;
+}): {
+  host: FlowHost;
+  log: {
+    attachedCards: { defId: CardDefId; dest: string }[];
+    skillsGiven: SkillId[];
+    modifiersAttached: { card: CardInstanceId; mod: ModifierId }[];
+    bulkAttach: { selector: string; mod: ModifierId }[];
+    combatStarted: EnemyGroupId[];
+  };
+} {
+  const log = {
+    attachedCards: [] as { defId: CardDefId; dest: string }[],
+    skillsGiven: [] as SkillId[],
+    modifiersAttached: [] as { card: CardInstanceId; mod: ModifierId }[],
+    bulkAttach: [] as { selector: string; mod: ModifierId }[],
+    combatStarted: [] as EnemyGroupId[],
+  };
+  const host: FlowHost = {
+    sampleCardsFromPool: (_poolId, n) => (opts.poolCards ?? []).slice(0, n),
+    attachCardToDestination: (defId, dest) => {
+      log.attachedCards.push({ defId, dest });
+      const inst: CardInstance = {
+        instanceId: id<CardInstanceId>(`inst-${defId}-${Math.random()}`),
+        defId,
+        modifiers: [],
+        acquired: { kind: 'event' },
       };
-      const rt = new FlowRuntime();
-      const status = rt.start(makeEvent('d-' + kindName), flow, makeCtx());
-      expect(status.kind).toBe('awaitingDeferred');
-      if (status.kind === 'awaitingDeferred') {
-        expect(status.stepKind).toBe(kindName);
-      }
-    });
+      return { ok: true, cardInstance: inst };
+    },
+    sampleSkillsForOffer: ({ count }) => (opts.skillsForOffer ?? []).slice(0, count),
+    addSkillToCharacter: (skillId) => { log.skillsGiven.push(skillId); },
+    filterCardsForUpgrade: () => [...(opts.upgradeCandidates ?? [])],
+    sampleModifierUpgrades: (_card, n) => (opts.modifierChoices ?? []).slice(0, n),
+    attachModifierToCard: (cardId, modId) => {
+      log.modifiersAttached.push({ card: cardId, mod: modId });
+      return true;
+    },
+    forceAttachModifier: ({ selector, modifierId }) => {
+      log.bulkAttach.push({ selector, mod: modifierId });
+      return { matched: 1 };
+    },
+    beginCombat: (egId) => { log.combatStarted.push(egId); },
+  };
+  return { host, log };
+}
+
+describe('FlowRuntime — cardOffer', () => {
+  function makeFlow(picks: number, iterations: number, dest: 'currentDeck' | 'inventory' = 'currentDeck'): FlowDefinition {
+    return {
+      id: id<ScenarioId>('co'),
+      entryStepId: 's',
+      steps: {
+        s: {
+          kind: 'cardOffer', poolId: 'pool_x',
+          picksPerIteration: picks, iterations, destination: dest,
+          allowSkip: true, next: 'end',
+        },
+        end: { kind: 'end', outcome: 'success' },
+      },
+    };
   }
+
+  it('pickCard advances iterations and finishes', () => {
+    const { host, log } = makeMockHost({
+      poolCards: [id<CardDefId>('a'), id<CardDefId>('b'), id<CardDefId>('c')],
+    });
+    const ctx = { ...makeCtx(), host };
+    const rt = new FlowRuntime();
+    const s1 = rt.start(makeEvent('co'), makeFlow(3, 3), ctx);
+    expect(s1.kind).toBe('awaitingCardPick');
+    if (s1.kind !== 'awaitingCardPick') throw new Error();
+    expect(s1.iteration).toBe(1);
+    expect(s1.totalIterations).toBe(3);
+    expect(s1.choices).toEqual([id<CardDefId>('a'), id<CardDefId>('b'), id<CardDefId>('c')]);
+
+    const s2 = rt.pickCard(id<CardDefId>('a'), ctx);
+    expect(s2.kind).toBe('awaitingCardPick');
+    if (s2.kind === 'awaitingCardPick') expect(s2.iteration).toBe(2);
+
+    rt.pickCard(id<CardDefId>('b'), ctx);
+    const s4 = rt.pickCard(id<CardDefId>('c'), ctx);
+    expect(s4.kind).toBe('finished');
+
+    expect(log.attachedCards).toHaveLength(3);
+    expect(log.attachedCards.every(a => a.dest === 'currentDeck')).toBe(true);
+  });
+
+  it('skipCardPick advances iteration without attaching', () => {
+    const { host, log } = makeMockHost({ poolCards: [id<CardDefId>('a')] });
+    const ctx = { ...makeCtx(), host };
+    const rt = new FlowRuntime();
+    rt.start(makeEvent('co'), makeFlow(1, 2), ctx);
+    const s = rt.skipCardPick(ctx);
+    expect(s.kind).toBe('awaitingCardPick');
+    if (s.kind === 'awaitingCardPick') expect(s.iteration).toBe(2);
+    rt.skipCardPick(ctx);
+    expect(rt.getStatus().kind).toBe('finished');
+    expect(log.attachedCards).toHaveLength(0);
+  });
+
+  it('throws when picking a card not in the offer', () => {
+    const { host } = makeMockHost({ poolCards: [id<CardDefId>('a')] });
+    const ctx = { ...makeCtx(), host };
+    const rt = new FlowRuntime();
+    rt.start(makeEvent('co'), makeFlow(1, 1), ctx);
+    expect(() => rt.pickCard(id<CardDefId>('not_offered'), ctx)).toThrow(/not in current offer/);
+  });
+
+  it('requires host', () => {
+    const ctx = makeCtx(); // no host
+    const rt = new FlowRuntime();
+    expect(() => rt.start(makeEvent('co'), makeFlow(1, 1), ctx)).toThrow(/host is required/);
+  });
+});
+
+describe('FlowRuntime — skillOffer', () => {
+  function makeFlow(canSkip: boolean = false): FlowDefinition {
+    return {
+      id: id<ScenarioId>('so'),
+      entryStepId: 's',
+      steps: {
+        s: { kind: 'skillOffer', count: 3, allowSkip: canSkip, next: 'end' },
+        end: { kind: 'end', outcome: 'success' },
+      },
+    };
+  }
+
+  it('presents candidates + pickSkill finishes', () => {
+    const { host, log } = makeMockHost({
+      skillsForOffer: [id<SkillId>('sa'), id<SkillId>('sb'), id<SkillId>('sc')],
+    });
+    const ctx = { ...makeCtx(), host };
+    const rt = new FlowRuntime();
+    const s = rt.start(makeEvent('so'), makeFlow(), ctx);
+    expect(s.kind).toBe('awaitingSkillPick');
+    if (s.kind === 'awaitingSkillPick') expect(s.choices).toHaveLength(3);
+    const done = rt.pickSkill(id<SkillId>('sb'), ctx);
+    expect(done.kind).toBe('finished');
+    expect(log.skillsGiven).toEqual([id<SkillId>('sb')]);
+  });
+
+  it('skipSkillPick (when allowed) finishes without granting skill', () => {
+    const { host, log } = makeMockHost({ skillsForOffer: [id<SkillId>('sa')] });
+    const ctx = { ...makeCtx(), host };
+    const rt = new FlowRuntime();
+    rt.start(makeEvent('so'), makeFlow(true), ctx);
+    const done = rt.skipSkillPick(ctx);
+    expect(done.kind).toBe('finished');
+    expect(log.skillsGiven).toHaveLength(0);
+  });
+
+  it('skipSkillPick when not allowed throws', () => {
+    const { host } = makeMockHost({ skillsForOffer: [id<SkillId>('sa')] });
+    const ctx = { ...makeCtx(), host };
+    const rt = new FlowRuntime();
+    rt.start(makeEvent('so'), makeFlow(false), ctx);
+    expect(() => rt.skipSkillPick(ctx)).toThrow(/does not allow skip/);
+  });
+});
+
+describe('FlowRuntime — cardUpgrade', () => {
+  function makeFlow(count: number): FlowDefinition {
+    return {
+      id: id<ScenarioId>('cu'),
+      entryStepId: 's',
+      steps: {
+        s: {
+          kind: 'cardUpgrade', source: 'currentDeck',
+          count, allowSkip: true, next: 'end',
+        },
+        end: { kind: 'end', outcome: 'success' },
+      },
+    };
+  }
+
+  function makeCard(n: string): CardInstance {
+    return {
+      instanceId: id<CardInstanceId>(`inst-${n}`),
+      defId: id<CardDefId>('d'),
+      modifiers: [],
+      acquired: { kind: 'starter' },
+    };
+  }
+
+  it('happy path: pick card → pick modifier → finish', () => {
+    const card1 = makeCard('1');
+    const { host, log } = makeMockHost({
+      upgradeCandidates: [card1, makeCard('2')],
+      modifierChoices: [id<ModifierId>('m1'), id<ModifierId>('m2'), id<ModifierId>('m3')],
+    });
+    const ctx = { ...makeCtx(), host };
+    const rt = new FlowRuntime();
+    const s1 = rt.start(makeEvent('cu'), makeFlow(1), ctx);
+    expect(s1.kind).toBe('awaitingCardUpgradeTarget');
+
+    const s2 = rt.pickCardToUpgrade(card1.instanceId, ctx);
+    expect(s2.kind).toBe('awaitingModifierPick');
+
+    const s3 = rt.pickModifier(id<ModifierId>('m2'), ctx);
+    expect(s3.kind).toBe('finished');
+    expect(log.modifiersAttached).toEqual([{ card: card1.instanceId, mod: id<ModifierId>('m2') }]);
+  });
+
+  it('forceModifierId skips modifier pick', () => {
+    const card1 = makeCard('1');
+    const { host, log } = makeMockHost({
+      upgradeCandidates: [card1],
+    });
+    const ctx = { ...makeCtx(), host };
+    const flow: FlowDefinition = {
+      id: id<ScenarioId>('cuf'),
+      entryStepId: 's',
+      steps: {
+        s: {
+          kind: 'cardUpgrade', source: 'currentDeck', count: 1,
+          forceModifierId: id<ModifierId>('m_forced'),
+          next: 'end',
+        },
+        end: { kind: 'end', outcome: 'success' },
+      },
+    };
+    const rt = new FlowRuntime();
+    rt.start(makeEvent('cuf'), flow, ctx);
+    const done = rt.pickCardToUpgrade(card1.instanceId, ctx);
+    expect(done.kind).toBe('finished');
+    expect(log.modifiersAttached).toEqual([
+      { card: card1.instanceId, mod: id<ModifierId>('m_forced') },
+    ]);
+  });
+
+  it('no candidates → auto-finishes', () => {
+    const { host } = makeMockHost({ upgradeCandidates: [] });
+    const ctx = { ...makeCtx(), host };
+    const rt = new FlowRuntime();
+    const s = rt.start(makeEvent('cu'), makeFlow(1), ctx);
+    expect(s.kind).toBe('finished');
+  });
+
+  it('skipCardUpgrade jumps past all iterations', () => {
+    const { host, log } = makeMockHost({
+      upgradeCandidates: [makeCard('1')],
+      modifierChoices: [id<ModifierId>('m1')],
+    });
+    const ctx = { ...makeCtx(), host };
+    const rt = new FlowRuntime();
+    rt.start(makeEvent('cu'), makeFlow(3), ctx);
+    const done = rt.skipCardUpgrade(ctx);
+    expect(done.kind).toBe('finished');
+    expect(log.modifiersAttached).toHaveLength(0);
+  });
+
+  it('multiple iterations: pickCard → pickModifier → pickCard → pickModifier → finish', () => {
+    const card1 = makeCard('1');
+    const card2 = makeCard('2');
+    const { host, log } = makeMockHost({
+      upgradeCandidates: [card1, card2],
+      modifierChoices: [id<ModifierId>('m1')],
+    });
+    const ctx = { ...makeCtx(), host };
+    const rt = new FlowRuntime();
+    rt.start(makeEvent('cu'), makeFlow(2), ctx);
+
+    rt.pickCardToUpgrade(card1.instanceId, ctx);
+    let s = rt.pickModifier(id<ModifierId>('m1'), ctx);
+    expect(s.kind).toBe('awaitingCardUpgradeTarget'); // iter 2
+
+    rt.pickCardToUpgrade(card2.instanceId, ctx);
+    s = rt.pickModifier(id<ModifierId>('m1'), ctx);
+    expect(s.kind).toBe('finished');
+    expect(log.modifiersAttached).toHaveLength(2);
+  });
+});
+
+describe('FlowRuntime — cardModifierAttach', () => {
+  it('bulk allInDeck auto-applies and advances', () => {
+    const { host, log } = makeMockHost({});
+    const ctx = { ...makeCtx(), host };
+    const flow: FlowDefinition = {
+      id: id<ScenarioId>('cma'),
+      entryStepId: 's',
+      steps: {
+        s: {
+          kind: 'cardModifierAttach', cardInstanceSelector: 'allInDeck',
+          modifierId: id<ModifierId>('curse'),
+          next: 'end',
+        },
+        end: { kind: 'end', outcome: 'success' },
+      },
+    };
+    const rt = new FlowRuntime();
+    const s = rt.start(makeEvent('cma'), flow, ctx);
+    expect(s.kind).toBe('finished');
+    expect(log.bulkAttach).toEqual([{ selector: 'allInDeck', mod: id<ModifierId>('curse') }]);
+  });
+
+  it('choose variant awaits target then attaches forced mod', () => {
+    const card1: CardInstance = {
+      instanceId: id<CardInstanceId>('c1'),
+      defId: id<CardDefId>('d'),
+      modifiers: [],
+      acquired: { kind: 'starter' },
+    };
+    const { host, log } = makeMockHost({ upgradeCandidates: [card1] });
+    const ctx = { ...makeCtx(), host };
+    const flow: FlowDefinition = {
+      id: id<ScenarioId>('cmc'),
+      entryStepId: 's',
+      steps: {
+        s: {
+          kind: 'cardModifierAttach', cardInstanceSelector: 'choose',
+          modifierId: id<ModifierId>('blessing'),
+          next: 'end',
+        },
+        end: { kind: 'end', outcome: 'success' },
+      },
+    };
+    const rt = new FlowRuntime();
+    const s1 = rt.start(makeEvent('cmc'), flow, ctx);
+    expect(s1.kind).toBe('awaitingCardUpgradeTarget');
+    if (s1.kind === 'awaitingCardUpgradeTarget') {
+      expect(s1.forcedModifierId).toBe(id<ModifierId>('blessing'));
+    }
+    const s2 = rt.pickCardForModifierAttach(card1.instanceId, ctx);
+    expect(s2.kind).toBe('finished');
+    expect(log.modifiersAttached).toEqual([
+      { card: card1.instanceId, mod: id<ModifierId>('blessing') },
+    ]);
+  });
+});
+
+describe('FlowRuntime — combatStart', () => {
+  function makeFlow(withDefeatPath: boolean = true): FlowDefinition {
+    return {
+      id: id<ScenarioId>('cs'),
+      entryStepId: 's',
+      steps: {
+        s: {
+          kind: 'combatStart',
+          enemyGroupId: id<EnemyGroupId>('eg_test'),
+          afterVictoryNext: 'win',
+          afterDefeatNext: withDefeatPath ? 'lose' : undefined,
+        },
+        win:  { kind: 'end', outcome: 'success' },
+        lose: { kind: 'end', outcome: 'failure' },
+      },
+    };
+  }
+
+  it('entering combatStart sets inCombat status and calls host.beginCombat', () => {
+    const { host, log } = makeMockHost({});
+    const ctx = { ...makeCtx(), host };
+    const rt = new FlowRuntime();
+    const s = rt.start(makeEvent('cs'), makeFlow(), ctx);
+    expect(s.kind).toBe('inCombat');
+    if (s.kind === 'inCombat') expect(s.enemyGroupId).toBe(id<EnemyGroupId>('eg_test'));
+    expect(log.combatStarted).toEqual([id<EnemyGroupId>('eg_test')]);
+  });
+
+  it('combatResolved(won) jumps to afterVictoryNext', () => {
+    const { host } = makeMockHost({});
+    const ctx = { ...makeCtx(), host };
+    const rt = new FlowRuntime();
+    rt.start(makeEvent('cs'), makeFlow(), ctx);
+    const s = rt.combatResolved('won', ctx);
+    expect(s.kind).toBe('finished');
+    if (s.kind === 'finished') expect(s.outcome).toBe('success');
+  });
+
+  it('combatResolved(lost) with defeat path jumps there', () => {
+    const { host } = makeMockHost({});
+    const ctx = { ...makeCtx(), host };
+    const rt = new FlowRuntime();
+    rt.start(makeEvent('cs'), makeFlow(true), ctx);
+    const s = rt.combatResolved('lost', ctx);
+    expect(s.kind).toBe('finished');
+    if (s.kind === 'finished') expect(s.outcome).toBe('failure');
+  });
+
+  it('combatResolved(lost) without defeat path → flow finishes as failure', () => {
+    const { host } = makeMockHost({});
+    const ctx = { ...makeCtx(), host };
+    const rt = new FlowRuntime();
+    rt.start(makeEvent('cs'), makeFlow(false), ctx);
+    const s = rt.combatResolved('lost', ctx);
+    expect(s.kind).toBe('finished');
+    if (s.kind === 'finished') expect(s.outcome).toBe('failure');
+  });
 });
 
 // ====================================================================
