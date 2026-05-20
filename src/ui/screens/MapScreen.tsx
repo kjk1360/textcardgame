@@ -6,23 +6,22 @@ import { ThreeBoxLayout } from '../layout/ThreeBoxLayout.js';
 import type { MapNode, MapState } from '../../types/index.js';
 
 /**
- * MapScreen — 15×15 bordered cells with emoji content.
+ * MapScreen — 15×15 bordered cells with emoji content + fog of war.
  *
- * Cell geometry (shared borders, 3w × 2h per cell, +1 for outer right/bottom):
- *   total = 15*3+1 = 46 chars wide
+ * Cell geometry (shared borders, 4w × 2h per cell — visually square):
+ *   total = 15*4+1 = 61 chars wide
  *   total = 15*2+1 = 31 chars tall
  *
  * Each cell:
- *   ┬───┬       <- top border (junctions ┌ ┐ ┴ ┼ ┬ ─)
- *   │ X │       <- content row: vertical border + 2-col emoji
+ *   ┬────┬       <- top border (4 wide: 3 dashes + junction)
+ *   │ XX │       <- content row: border + emoji(2) + space(1) + border
  *
- * Selection / state is indicated by BORDER COLOR (per-cell), not by
- * emoji color (emojis keep native color in terminals):
- *   yellow + blink → focused destination
- *   yellow         → current player position
- *   type-color     → movable adjacent
- *   cyan           → rest hub (永久)
- *   gray dim       → visited cleared / unknown
+ * Fog of war (per user spec):
+ *   - Only the 4 cells PHYSICALLY ADJACENT (up/down/left/right) to current
+ *     are visible with their emoji + colored border
+ *   - Current cell ⭐ always visible
+ *   - Rest hub ⛺ always visible (永久 goal)
+ *   - Everything else: ▒▒▒ gray shade, gray border
  *
  * Border-coloring rule when 2+ cells touch a segment: the highest-
  * precedence cell wins (focused > current > movable > rest > visited).
@@ -175,6 +174,9 @@ function strongestColor(
   return cellBorderColor(bestCell, state, focusedKey, movable, blink);
 }
 
+const CELL_W = 4; // includes shared border at left
+const CELL_H = 2; // includes shared border at top
+
 function MapGrid({ focusedKey, blink }: { focusedKey: string | null; blink: boolean }): React.ReactElement {
   const game = useGame();
   const run = game.state.run!;
@@ -183,8 +185,22 @@ function MapGrid({ focusedKey, blink }: { focusedKey: string | null; blink: bool
   const W = map.width;
   const H = map.height;
 
-  const totalWidth = W * 3 + 1;
-  const totalHeight = H * 2 + 1;
+  const totalWidth = W * CELL_W + 1;
+  const totalHeight = H * CELL_H + 1;
+
+  // Physical-adjacency visibility (fog of war): only current + 4 neighbors
+  // (up/down/left/right) + rest hub are revealed
+  const cur = map.nodes[map.currentNodeKey]!;
+  const visibleKeys = new Set<string>([map.currentNodeKey]);
+  const dirs: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  for (const [dx, dy] of dirs) {
+    const key = `${cur.x + dx},${cur.y + dy}`;
+    if (map.nodes[key]) visibleKeys.add(key);
+  }
+  // Rest hub always visible
+  for (const n of Object.values(map.nodes)) {
+    if (n.nodeType === 'rest') visibleKeys.add(n.key);
+  }
 
   const cellAt = (cx: number, cy: number): MapNode | undefined => {
     if (cx < 0 || cy < 0 || cx >= W || cy >= H) return undefined;
@@ -195,7 +211,7 @@ function MapGrid({ focusedKey, blink }: { focusedKey: string | null; blink: bool
   for (let y = 0; y < totalHeight; y++) {
     rows.push(
       <Box key={`row-${y}`} flexDirection="row">
-        {renderRow(y, totalWidth, W, H, map, focusedKey, blink, movable, cellAt)}
+        {renderRow(y, totalWidth, W, H, map, focusedKey, blink, movable, visibleKeys, cellAt)}
       </Box>,
     );
   }
@@ -212,14 +228,14 @@ function renderRow(
   focusedKey: string | null,
   blink: boolean,
   movable: ReadonlySet<string>,
+  visibleKeys: ReadonlySet<string>,
   cellAt: (cx: number, cy: number) => MapNode | undefined,
 ): React.ReactElement[] {
-  const onHBorder = (y % 2 === 0);
-  const cy_content = (y - 1) / 2;  // valid when !onHBorder
-  const cy_above = y / 2 - 1;       // valid when onHBorder
-  const cy_below = y / 2;           // valid when onHBorder
+  const onHBorder = (y % CELL_H === 0);
+  const cy_content = Math.floor(y / CELL_H);
+  const cy_above = y / CELL_H - 1;
+  const cy_below = y / CELL_H;
 
-  // Build segments of consecutive same-color chars to minimize Text nodes
   const segments: Array<{ text: string; color: string }> = [];
   const push = (text: string, color: string) => {
     if (segments.length > 0 && segments[segments.length - 1]!.color === color) {
@@ -231,48 +247,47 @@ function renderRow(
 
   let x = 0;
   while (x < totalWidth) {
-    const onVBorder = (x % 3 === 0);
-    const cx_left = x / 3 - 1;
-    const cx_right = x / 3;
-    const cx_content = Math.floor(x / 3);
+    const onVBorder = (x % CELL_W === 0);
+    const cx_left = x / CELL_W - 1;
+    const cx_right = x / CELL_W;
+    const cx_content = Math.floor(x / CELL_W);
+    const contentX = x % CELL_W; // 0=border, 1/2/3=content (4-wide cells)
 
     if (onHBorder && onVBorder) {
-      // Junction at (x, y) — up to 4 cells touch
       const tl = cellAt(cx_left, cy_above);
       const tr = cellAt(cx_right, cy_above);
       const bl = cellAt(cx_left, cy_below);
       const br = cellAt(cx_right, cy_below);
-      const ch = junctionChar(x, y, totalWidth, totalWidth /* unused for H */, W, H);
+      const ch = junctionChar(x, y, W, H);
       const color = strongestColor([tl, tr, bl, br], map, focusedKey, movable, blink);
       push(ch, color);
       x++;
     } else if (onHBorder) {
-      // Horizontal border between cells above (cy_above) and below (cy_below) at column cx_content
       const above = cellAt(cx_content, cy_above);
       const below = cellAt(cx_content, cy_below);
       const color = strongestColor([above, below], map, focusedKey, movable, blink);
       push('─', color);
       x++;
     } else if (onVBorder) {
-      // Vertical border between cells left and right at row cy_content
       const left = cellAt(cx_left, cy_content);
       const right = cellAt(cx_right, cy_content);
       const color = strongestColor([left, right], map, focusedKey, movable, blink);
       push('│', color);
       x++;
     } else {
-      // Content row, content column
+      // Content row inside a cell. 3 chars wide: [1] [2] [3]
+      // Layout: emoji (2 chars at positions 1,2) + space (position 3)
       const cell = cellAt(cx_content, cy_content);
-      const contentX = x % 3; // 1 or 2
       if (contentX === 1) {
-        // Emit the 2-col emoji (or 2-char placeholder)
-        const ec = emojiCellContent(cell, map, focusedKey);
-        // Emoji's "color" in segments is set to default (we use native color),
-        // but we still push as default to break the segment.
+        const ec = emojiCellContent(cell, map, focusedKey, visibleKeys);
         push(ec.text, ec.color);
-        x += 2; // emoji takes 2 cols
+        x += ec.width; // emoji = 2 cols, fog placeholder also 2-3 cols
+      } else if (contentX === 3) {
+        // Right-pad space — appears AFTER the emoji
+        push(' ', 'gray');
+        x++;
       } else {
-        // contentX === 2 should be skipped (already covered)
+        // contentX === 2 should be covered by emoji emission at contentX === 1
         x++;
       }
     }
@@ -285,14 +300,12 @@ function renderRow(
 
 function junctionChar(
   x: number, y: number,
-  totalWidth: number,
-  _totalHeight: number,
   W: number, H: number,
 ): string {
   const isTop = y === 0;
-  const isBot = y === H * 2;
+  const isBot = y === H * CELL_H;
   const isLeft = x === 0;
-  const isRight = x === W * 3;
+  const isRight = x === W * CELL_W;
   if (isTop && isLeft)  return '┌';
   if (isTop && isRight) return '┐';
   if (isBot && isLeft)  return '└';
@@ -307,35 +320,37 @@ function junctionChar(
 interface ContentChunk {
   text: string;
   color: string;
+  width: number;   // visual cols consumed (emoji = 2, ascii placeholder = N)
 }
 
 function emojiCellContent(
   cell: MapNode | undefined,
   state: MapState,
   focusedKey: string | null,
+  visibleKeys: ReadonlySet<string>,
 ): ContentChunk {
+  // Off-grid / undefined
   if (!cell) {
-    return { text: '▒▒', color: 'gray' };
+    return { text: '░░', color: 'gray', width: 2 };
   }
   const isCurrent = cell.key === state.currentNodeKey;
   const isRest = cell.nodeType === 'rest';
-  const isVisited = state.visitedNodeKeys.has(cell.key);
+  const isVisible = visibleKeys.has(cell.key);
   const isFocused = focusedKey === cell.key;
 
   if (isCurrent) {
-    return { text: '⭐', color: 'yellow' };
+    return { text: '⭐', color: 'yellow', width: 2 };
   }
   if (isRest) {
-    return { text: '⛺', color: 'cyan' };
+    return { text: '⛺', color: 'cyan', width: 2 };
   }
-  if (isFocused || isVisited) {
-    return { text: emojiForType(cell.nodeType), color: 'white' };
+  if (!isVisible) {
+    // Fog of war — hide everything not in line of sight
+    return { text: '░░', color: 'gray', width: 2 };
   }
-  // Unvisited and not directly reachable → fog of war
-  // (Movable cells are not necessarily visited either — but they're
-  //  adjacent to current. Expose them via focused state above.)
-  // For movable but unvisited adjacent, also show the emoji.
-  return { text: emojiForType(cell.nodeType), color: 'white' };
+  // Visible (= physically adjacent to current)
+  void isFocused; // focus state is reflected via border color, not content
+  return { text: emojiForType(cell.nodeType), color: 'white', width: 2 };
 }
 
 function emojiForType(t: string): string {

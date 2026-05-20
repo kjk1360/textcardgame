@@ -278,6 +278,9 @@ export const FLOW_JOURNEY_START: FlowDefinition = {
       poolId: POOL_START_CARDS.id,
       picksPerIteration: 3,
       iterations: 5,
+      // Pick "5 minus whatever the player already drafted from inventory".
+      // If they brought 3 from the warehouse, journey_start fills 2 more.
+      fillToDeckCount: 5,
       destination: 'currentDeck',
       next: 'depart',
     },

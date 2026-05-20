@@ -467,11 +467,25 @@ export class FlowRuntime {
     const step = this.currentStep();
     if (step.kind !== 'cardOffer') throw new Error('not cardOffer');
     const host = this.requireHost(ctx, 'cardOffer');
+
+    // Compute effective iterations. With fillToDeckCount set, we only pick
+    // as many as needed to reach the target deck size.
+    const effectiveIterations = step.fillToDeckCount !== undefined
+      ? Math.max(0, step.fillToDeckCount - host.getCurrentDeckSize())
+      : step.iterations;
+
+    if (effectiveIterations === 0) {
+      // Nothing to pick — skip the step entirely
+      this.goto(step.next);
+      this.executeUntilBlocked(ctx);
+      return;
+    }
+
     const choices = host.sampleCardsFromPool(step.poolId, step.picksPerIteration);
     this.internal!.pending = {
       kind: 'cardOffer',
       iteration: 0,
-      totalIterations: step.iterations,
+      totalIterations: effectiveIterations,
       choices,
       destination: step.destination,
       canSkip: step.allowSkip ?? false,

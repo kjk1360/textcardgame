@@ -407,6 +407,7 @@ function makeMockHost(opts: {
       return { matched: 1 };
     },
     beginCombat: (egId) => { log.combatStarted.push(egId); },
+    getCurrentDeckSize: () => 0,
   };
   return { host, log };
 }

@@ -85,6 +85,14 @@ export interface CardOfferStep {
   readonly destination: 'inventory' | 'currentDeck';
   readonly allowSkip?: boolean;
   readonly next: string;
+  /**
+   * When set, the runtime overrides `iterations` to
+   *   max(0, fillToDeckCount - currentDeckSize)
+   * so the step picks "only as many cards as needed to bring the deck to N".
+   * If the deck is already ≥ N, the step is skipped entirely.
+   * Used by 여정의 시작 to fill to 5 minus any inventory-drafted cards.
+   */
+  readonly fillToDeckCount?: number;
 }
 
 export interface SkillOfferStep {

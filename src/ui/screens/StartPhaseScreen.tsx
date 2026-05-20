@@ -10,17 +10,17 @@ import type { CardInstance } from '../../types/index.js';
 
 /**
  * Start Phase — two stages:
+ *   1. (optional) skill box purchase
+ *   2. (optional) draft cards from inventory for the run's starting deck
  *
- *   1. (optional) Skill box purchase
- *   2. (optional) Draft cards from inventory for the run's starting deck
+ * Draft UI is a SINGLE unified view (no inventory/drafted toggle):
+ *   - Action button "선택 완료 → 출발" at TOP (so the focus shift bug
+ *     can never accidentally trigger depart while the list is shrinking)
+ *   - Then inventory items (가져가기)
+ *   - Then currently-drafted items (인벤으로 되돌리기)
  *
- * Both stages auto-skip when nothing's available:
- *   - Empty skill box / not affordable → straight to stage 2
- *   - Empty inventory → straight to enterDungeon
- *
- * Per design: first run of a new character starts with empty deck so
- * journey_start event populates it. Returning characters draft from
- * inventory (up to DEFAULT_DRAFT_CAPACITY cards, scalable via skills later).
+ * journey_start event in demo.ts uses fillToDeckCount=5, so it only
+ * picks (5 - draftedCount) extra cards. Total deck always ≤ 5.
  */
 
 export interface StartPhaseScreenProps {
@@ -39,13 +39,9 @@ export function StartPhaseScreen({ onEnteredDungeon }: StartPhaseScreenProps): R
     return (
       <SkillStage
         onAdvance={() => {
-          // If no inventory cards, skip the draft stage entirely
-          if (!hasInventory && (slot.difficultyLevel === 0)) {
-            // New character with no inventory — depart immediately
-            // (journey_start will fire and populate the deck)
-            doEnterDungeon();
-          } else if (!hasInventory) {
-            // Returning char with empty inventory — depart with whatever
+          if (!hasInventory) {
+            // Nothing to draft — depart immediately (journey_start will run
+            // for new chars; returning chars will start with empty deck)
             doEnterDungeon();
           } else {
             setStage('draft');
@@ -58,7 +54,6 @@ export function StartPhaseScreen({ onEnteredDungeon }: StartPhaseScreenProps): R
   return <DraftStage onDepart={doEnterDungeon} />;
 
   function doEnterDungeon() {
-    // dispatch via the game directly (no need to wait for re-render)
     game.enterDungeon({ deck: [] });
     onEnteredDungeon();
   }
@@ -146,127 +141,97 @@ function SkillStage({ onAdvance }: { onAdvance: () => void }): React.ReactElemen
 }
 
 // ====================================================================
-// Draft stage
+// Draft stage (single unified view)
 // ====================================================================
 
-type DraftAction = { kind: 'withdraw'; card: CardInstance } | { kind: 'depart' };
+type DraftAction =
+  | { kind: 'depart' }
+  | { kind: 'withdraw'; card: CardInstance }
+  | { kind: 'return';   card: CardInstance };
 
 function DraftStage({ onDepart }: { onDepart: () => void }): React.ReactElement {
   const game = useGame();
   const dispatch = useDispatch();
   const slot = game.state.slots[game.state.currentSlotIndex!]!;
-  const [view, setView] = useState<'inventory' | 'drafted'>('inventory');
   const [focused, setFocused] = useState<CardInstance | null>(null);
 
   const drafted = slot.draftedDeck ?? [];
   const inv = game.state.global.inventory.cards;
   const cap = DEFAULT_DRAFT_CAPACITY;
+  const draftFull = drafted.length >= cap;
 
-  if (view === 'inventory') {
-    const items: FocusListItem<DraftAction>[] = inv.map(card => {
-      const def = game.registries.cards.get(card.defId);
-      const stars = card.modifiers.length > 0 ? `+${card.modifiers.length}` : '';
-      const full = drafted.length >= cap;
-      return {
-        id: card.instanceId,
-        label: `[가져가기] ${def.name} ${stars}`,
-        value: { kind: 'withdraw', card },
-        disabled: full,
-        disabledReason: full ? `출발 덱 가득 (${drafted.length}/${cap})` : undefined,
-      };
-    });
-    items.push({ id: '__view_drafted__', label: `→ 출발 덱 보기 (${drafted.length}/${cap})`, value: { kind: 'depart' } });
-    items.push({ id: '__depart__', label: `🚪 출발하기 (현재 ${drafted.length}장 휴대)`, value: { kind: 'depart' } });
+  const items: FocusListItem<DraftAction>[] = [
+    // 1) Depart action at TOP — won't shift when list size changes
+    {
+      id: '__depart__',
+      label: `🚪 선택 완료 → 출발 (${drafted.length}/${cap}장 휴대)`,
+      value: { kind: 'depart' },
+    },
+  ];
 
-    return (
-      <ThreeBoxLayout
-        title={`${slot.characterName} — 시작 페이즈 2/2 (출발 덱 구성) · 인벤토리`}
-        main={
-          <Box flexDirection="column">
-            <Text>인벤에서 가져갈 카드를 고르세요 (최대 {cap}장).</Text>
-            <Text dimColor>현재 출발 덱: {drafted.length}/{cap}장</Text>
-            <Box marginTop={1}>
-              <FocusList
-                items={items}
-                onSelect={it => {
-                  if (it.id === '__depart__') {
-                    onDepart();
-                    return;
-                  }
-                  if (it.id === '__view_drafted__') {
-                    setView('drafted');
-                    return;
-                  }
-                  const v = it.value;
-                  if (v.kind === 'withdraw') {
-                    dispatch(() => game.draftCardFromInventory(v.card.instanceId, cap));
-                  }
-                }}
-                onFocusChange={it => {
-                  if (!it) { setFocused(null); return; }
-                  const v = it.value;
-                  setFocused(v.kind === 'withdraw' ? v.card : null);
-                }}
-              />
-            </Box>
-          </Box>
-        }
-        bottom={<Text dimColor>↑↓ 선택  Enter 가져가기/출발  · 출발 덱 보기로 전환 가능</Text>}
-        right={focused ? <CardInstanceDetail card={focused} /> : <DraftInfoPanel drafted={drafted} cap={cap} />}
-      />
-    );
-  }
-
-  // drafted view
-  const items: FocusListItem<DraftAction>[] = drafted.map(card => {
+  // 2) Inventory cards — "가져가기" action
+  for (const card of inv) {
     const def = game.registries.cards.get(card.defId);
     const stars = card.modifiers.length > 0 ? `+${card.modifiers.length}` : '';
-    return {
-      id: card.instanceId,
-      label: `[인벤으로 되돌리기] ${def.name} ${stars}`,
+    items.push({
+      id: `inv-${card.instanceId}`,
+      label: `[가져가기]   ${def.name} ${stars}`,
       value: { kind: 'withdraw', card },
-    };
-  });
-  items.push({ id: '__view_inv__', label: `← 인벤토리로 돌아가기`, value: { kind: 'depart' } });
-  items.push({ id: '__depart__', label: `🚪 출발하기 (현재 ${drafted.length}장 휴대)`, value: { kind: 'depart' } });
+      disabled: draftFull,
+      disabledReason: draftFull ? `출발 덱 가득 (${drafted.length}/${cap})` : undefined,
+    });
+  }
+
+  // 3) Drafted cards — "되돌리기" action
+  for (const card of drafted) {
+    const def = game.registries.cards.get(card.defId);
+    const stars = card.modifiers.length > 0 ? `+${card.modifiers.length}` : '';
+    items.push({
+      id: `dft-${card.instanceId}`,
+      label: `[되돌리기]   ${def.name} ${stars}  ★ 출발 덱에 있음`,
+      value: { kind: 'return', card },
+    });
+  }
 
   return (
     <ThreeBoxLayout
-      title={`${slot.characterName} — 시작 페이즈 2/2 (출발 덱 구성) · 출발 덱`}
+      title={`${slot.characterName} — 시작 페이즈 2/2 (출발 덱 구성)`}
       main={
         <Box flexDirection="column">
-          <Text>출발 덱에서 인벤으로 되돌릴 수 있습니다.</Text>
-          <Text dimColor>현재 출발 덱: {drafted.length}/{cap}장</Text>
+          <Text>인벤에서 가져갈 카드를 고른 다음, 맨 위 "선택 완료 → 출발" 로 시작합니다.</Text>
+          <Text dimColor>최대 {cap}장. 인벤이 가득 차면 "가져가기" 옵션이 회색.</Text>
+          <Box marginTop={1} flexDirection="column">
+            <Text>현재 출발 덱: <Text color="cyan">{drafted.length}/{cap}</Text>장</Text>
+            <Text>인벤 보유: {inv.length}장</Text>
+            {drafted.length < cap && (
+              <Text color="yellow">
+                출발 후 빈 슬롯 {cap - drafted.length}장은 "여정의 시작" 이벤트가 채워줍니다.
+              </Text>
+            )}
+          </Box>
           <Box marginTop={1}>
-            {drafted.length === 0 ? (
-              <Text dimColor>출발 덱이 비어있음 (인벤토리로 돌아가서 가져오세요)</Text>
-            ) : null}
             <FocusList
               items={items}
               onSelect={it => {
-                if (it.id === '__depart__') {
-                  onDepart();
-                  return;
-                }
-                if (it.id === '__view_inv__') {
-                  setView('inventory');
-                  return;
-                }
                 const v = it.value;
-                if (v.kind === 'withdraw') {
+                if (v.kind === 'depart') {
+                  onDepart();
+                } else if (v.kind === 'withdraw') {
+                  dispatch(() => game.draftCardFromInventory(v.card.instanceId, cap));
+                } else if (v.kind === 'return') {
                   dispatch(() => game.undraftCard(v.card.instanceId));
                 }
               }}
               onFocusChange={it => {
                 if (!it) { setFocused(null); return; }
                 const v = it.value;
-                setFocused(v.kind === 'withdraw' ? v.card : null);
+                setFocused(v.kind === 'depart' ? null : v.card);
               }}
             />
           </Box>
         </Box>
       }
-      bottom={<Text dimColor>↑↓ 선택  Enter 되돌리기/출발</Text>}
+      bottom={<Text dimColor>↑↓ 선택  Enter 확정  · 맨 위 "선택 완료 → 출발" 로 마무리</Text>}
       right={focused ? <CardInstanceDetail card={focused} /> : <DraftInfoPanel drafted={drafted} cap={cap} />}
     />
   );
@@ -277,14 +242,15 @@ function DraftInfoPanel({ drafted, cap }: { drafted: readonly CardInstance[]; ca
     <Box flexDirection="column">
       <Text bold color="cyan">출발 덱 구성</Text>
       <Box marginTop={1} flexDirection="column">
-        <Text>{drafted.length}/{cap}장</Text>
-        <Text dimColor>인벤 카드를 골라 가져갑니다.</Text>
-        <Text dimColor>0장으로도 출발 가능</Text>
+        <Text>{drafted.length}/{cap}장 휴대</Text>
+        <Text dimColor>인벤에서 가져가기 — 강화 보존</Text>
+        <Text dimColor>출발 후 빈 슬롯은</Text>
+        <Text dimColor>"여정의 시작" 이벤트가 채움</Text>
       </Box>
       <Box marginTop={1} flexDirection="column">
         <Text color="yellow">팁:</Text>
+        <Text dimColor>· 0장으로 출발해도 OK</Text>
         <Text dimColor>· 강화된 카드일수록 강력</Text>
-        <Text dimColor>· 출발 후엔 못 바꿈</Text>
       </Box>
     </Box>
   );

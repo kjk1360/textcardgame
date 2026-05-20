@@ -98,4 +98,9 @@ export interface FlowHost {
    * the resume call asynchronously.
    */
   beginCombat(enemyGroupId: EnemyGroupId): void;
+
+  // ---- queries ----
+  /** Current run deck size. Used by cardOffer.fillToDeckCount to
+   *  compute "pick N to fill the deck to M" semantics. */
+  getCurrentDeckSize(): number;
 }
