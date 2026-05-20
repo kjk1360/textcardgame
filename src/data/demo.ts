@@ -214,6 +214,13 @@ export const ENEMY_SLIME: EnemyDefinition = {
     ],
   },
   rewards: { goldRange: [8, 14] },
+  sprite: [
+    '     ___     ',
+    '   ,~   ~,   ',
+    '  ( o   o )  ',
+    '   \\ ~~~ /   ',
+    "    `---'    ",
+  ],
 };
 
 export const ENEMY_BRUTE: EnemyDefinition = {
@@ -228,6 +235,15 @@ export const ENEMY_BRUTE: EnemyDefinition = {
     ],
   },
   rewards: { goldRange: [15, 25] },
+  sprite: [
+    '    _____    ',
+    '   /  X  \\   ',
+    '  | >   < |  ',
+    '  |  ===  |  ',
+    "   \\_____/   ",
+    '   /|   |\\   ',
+    '  d |   | b  ',
+  ],
 };
 
 export const GROUP_SLIME_SOLO: EnemyGroupDefinition = {

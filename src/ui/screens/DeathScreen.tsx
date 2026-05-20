@@ -1,17 +1,22 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { useDispatch, useGame } from '../EngineContext.js';
 import { ThreeBoxLayout } from '../layout/ThreeBoxLayout.js';
 
 /**
- * Death / game-over screen — shown after combat loss, before the slot
- * is wiped. Player presses Enter to acknowledge, then global state
- * (gold, inventory, passives) carries over to a fresh character.
+ * Death / game-over screen.
+ *
+ * Auto-transitions to the title after AUTO_DISMISS_MS so the player
+ * doesn't need to press anything. Enter still skips the wait.
+ *
+ * During the wait, a countdown is shown in the bottom bar.
  */
 
 export interface DeathScreenProps {
   onAcknowledged: () => void;
 }
+
+const AUTO_DISMISS_MS = 3500;
 
 export function DeathScreen({ onAcknowledged }: DeathScreenProps): React.ReactElement {
   const game = useGame();
@@ -19,6 +24,30 @@ export function DeathScreen({ onAcknowledged }: DeathScreenProps): React.ReactEl
   const slot = game.state.slots[game.state.currentSlotIndex!]!;
   const run = game.state.run;
 
+  const [remaining, setRemaining] = useState(AUTO_DISMISS_MS);
+
+  // Countdown tick
+  useEffect(() => {
+    const tickMs = 100;
+    const t = setInterval(() => {
+      setRemaining(r => {
+        const next = r - tickMs;
+        if (next <= 0) {
+          clearInterval(t);
+          // Defer the dispatch out of render cycle
+          setTimeout(() => {
+            dispatch(() => game.acknowledgeGameOver());
+            onAcknowledged();
+          }, 0);
+        }
+        return next;
+      });
+    }, tickMs);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Enter skips the wait
   useInput((_input, key) => {
     if (key.return) {
       dispatch(() => game.acknowledgeGameOver());
@@ -54,7 +83,11 @@ export function DeathScreen({ onAcknowledged }: DeathScreenProps): React.ReactEl
           </Box>
         </Box>
       }
-      bottom={<Text dimColor>Enter ▶ 타이틀로</Text>}
+      bottom={
+        <Text dimColor>
+          {Math.ceil(Math.max(0, remaining) / 1000)}초 후 타이틀로 (Enter 즉시 진행)
+        </Text>
+      }
       right={null}
     />
   );

@@ -39,6 +39,11 @@ export interface EnemyDefinition {
   readonly hpRange: [number, number];
   readonly intentScript: IntentScript;
   readonly rewards?: { goldRange: [number, number] };
+  /**
+   * Multi-line ASCII art shown in the combat scene. Lines are rendered
+   * as-is (no width assumption). Pokemon-style — small / blocky.
+   */
+  readonly sprite?: ReadonlyArray<string>;
 }
 
 export interface EnemyGroupDefinition {

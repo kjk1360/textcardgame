@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { useDispatch, useGame } from '../EngineContext.js';
 import { FocusList, type FocusListItem } from '../layout/FocusList.js';
@@ -7,22 +7,30 @@ import { resolveCardEffects } from '../../engine/modifiers/resolver.js';
 import type { CardInstance, EnemyActor } from '../../types/index.js';
 
 /**
- * CombatScreen — hand picker → target picker (if needed) → result.
+ * CombatScreen — Pokemon-style ASCII enemies + animated HP bars.
  *
  * Layout:
- *   MAIN: enemies + player resources + log
+ *   MAIN top: enemy sprites + HP bars + intents
+ *   MAIN bottom: player stats (HP/block/energy) + small HP bar
  *   BOTTOM: hand list (focusable)
  *   RIGHT: focused card detail OR focused enemy detail (during targeting)
  *
- * Keyboard:
- *   ↑↓ : navigate hand
- *   Enter : play card; if target needed, switches to enemy picker
- *   E : end turn
+ * Animations:
+ *   - Displayed HP tweens toward actor.hp over a few frames (~30 fps)
+ *   - Hit flash: brief red border on actors that just lost HP
+ *   - Input lockout (FocusList isActive=false) while any HP is animating
+ *
+ * Auto-end: combat resolves automatically on enemy death / player death
+ *   (engine-side), so this screen just unmounts when activity transitions.
  */
 
 type Phase =
   | { kind: 'picking' }
   | { kind: 'targeting'; cardInstanceId: string };
+
+const TWEEN_INTERVAL_MS = 40;       // ~25 fps animation
+const TWEEN_FRAMES_TO_CATCH_UP = 8; // 8 frames * 40ms = ~320ms for any change
+const FLASH_DURATION_MS = 250;
 
 export function CombatScreen(): React.ReactElement {
   const game = useGame();
@@ -42,8 +50,93 @@ export function CombatScreen(): React.ReactElement {
   const enemies = run.activity.enemies;
   const piles = run.activity.piles;
 
-  // E key always ends the turn (regardless of phase)
+  // ---------- HP animation state ----------
+  const PLAYER_ID = '__player__';
+  const [displayedHp, setDisplayedHp] = useState<Record<string, number>>(() => {
+    const init: Record<string, number> = { [PLAYER_ID]: player.hp };
+    for (const e of enemies) init[e.instanceId] = e.hp;
+    return init;
+  });
+  const [displayedBlock, setDisplayedBlock] = useState<Record<string, number>>(() => {
+    const init: Record<string, number> = { [PLAYER_ID]: player.block };
+    for (const e of enemies) init[e.instanceId] = e.block;
+    return init;
+  });
+  const [flashAt, setFlashAt] = useState<Record<string, number>>({});
+  // Bump every interval so derived flash state re-renders for fade
+  const [, setTickN] = useState(0);
+
+  // Initialize/reset displayed values for actors that appear/change
+  useEffect(() => {
+    setDisplayedHp(prev => {
+      const next = { ...prev };
+      if (!(PLAYER_ID in next)) next[PLAYER_ID] = player.hp;
+      for (const e of enemies) if (!(e.instanceId in next)) next[e.instanceId] = e.hp;
+      return next;
+    });
+    setDisplayedBlock(prev => {
+      const next = { ...prev };
+      if (!(PLAYER_ID in next)) next[PLAYER_ID] = player.block;
+      for (const e of enemies) if (!(e.instanceId in next)) next[e.instanceId] = e.block;
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enemies.length]);
+
+  // Tween toward actual hp / block; trigger flashes on drops
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTickN(n => n + 1);
+      setDisplayedHp(prev => {
+        const next: Record<string, number> = { ...prev };
+        let changed = false;
+        const tween = (key: string, target: number) => {
+          const cur = next[key] ?? target;
+          if (cur === target) return;
+          const diff = Math.abs(cur - target);
+          const step = Math.max(1, Math.ceil(diff / TWEEN_FRAMES_TO_CATCH_UP));
+          const newVal = cur > target ? Math.max(cur - step, target) : Math.min(cur + step, target);
+          if (newVal < cur) {
+            setFlashAt(f => ({ ...f, [key]: Date.now() }));
+          }
+          next[key] = newVal;
+          changed = true;
+        };
+        tween(PLAYER_ID, player.hp);
+        for (const e of enemies) tween(e.instanceId, e.hp);
+        return changed ? next : prev;
+      });
+      setDisplayedBlock(prev => {
+        const next: Record<string, number> = { ...prev };
+        let changed = false;
+        const tween = (key: string, target: number) => {
+          const cur = next[key] ?? target;
+          if (cur === target) return;
+          const diff = Math.abs(cur - target);
+          const step = Math.max(1, Math.ceil(diff / TWEEN_FRAMES_TO_CATCH_UP));
+          next[key] = cur > target ? Math.max(cur - step, target) : Math.min(cur + step, target);
+          changed = true;
+        };
+        tween(PLAYER_ID, player.block);
+        for (const e of enemies) tween(e.instanceId, e.block);
+        return changed ? next : prev;
+      });
+    }, TWEEN_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [player.hp, player.block, enemies]);
+
+  // Are we still animating? If yes, lock input.
+  const animating =
+    (displayedHp[PLAYER_ID] ?? player.hp) !== player.hp ||
+    (displayedBlock[PLAYER_ID] ?? player.block) !== player.block ||
+    enemies.some(e =>
+      (displayedHp[e.instanceId] ?? e.hp) !== e.hp ||
+      (displayedBlock[e.instanceId] ?? e.block) !== e.block,
+    );
+
+  // E key always ends the turn — but ignored during animation
   useInput((input, _key) => {
+    if (animating) return;
     if (input === 'e' || input === 'E') {
       dispatch(() => {
         game.combatEndTurn();
@@ -79,13 +172,36 @@ export function CombatScreen(): React.ReactElement {
       };
     });
 
+  const displayedFor = (key: string, fallback: number) => displayedHp[key] ?? fallback;
+  const displayedBlkFor = (key: string, fallback: number) => displayedBlock[key] ?? fallback;
+  const isFlashing = (key: string): boolean => {
+    const t = flashAt[key];
+    if (!t) return false;
+    return Date.now() - t < FLASH_DURATION_MS;
+  };
+
+  // Build common main view
+  const mainView = (
+    <CombatMain
+      player={player}
+      enemies={enemies}
+      piles={piles}
+      turn={run.activity.turn}
+      playerKey={PLAYER_ID}
+      displayedHp={displayedFor}
+      displayedBlock={displayedBlkFor}
+      flashing={isFlashing}
+    />
+  );
+
   if (phase.kind === 'targeting') {
     return (
       <ThreeBoxLayout
-        title="타겟 선택 — Esc 취소"
-        main={<CombatMain player={player} enemies={enemies} piles={piles} turn={run.activity.turn} />}
+        title={`타겟 선택 — Esc 취소${animating ? '  (애니메이션 중…)' : ''}`}
+        main={mainView}
         bottom={
           <FocusList
+            isActive={!animating}
             items={enemyItems}
             onFocusChange={it => setFocusedEnemy(it?.value ?? null)}
             onSelect={it => {
@@ -104,8 +220,8 @@ export function CombatScreen(): React.ReactElement {
 
   return (
     <ThreeBoxLayout
-      title={`전투 — 턴 ${run.activity.turn}`}
-      main={<CombatMain player={player} enemies={enemies} piles={piles} turn={run.activity.turn} />}
+      title={`전투 — 턴 ${run.activity.turn}${animating ? '  (애니메이션 중…)' : ''}`}
+      main={mainView}
       bottom={
         <Box flexDirection="column">
           <Text bold>손패 (E 턴 종료)</Text>
@@ -113,6 +229,7 @@ export function CombatScreen(): React.ReactElement {
             <Text dimColor>(손패 없음 — E 로 턴 종료)</Text>
           ) : (
             <FocusList
+              isActive={!animating}
               items={handItems}
               onFocusChange={it => setFocusedHand(it?.value ?? null)}
               onSelect={it => {
@@ -136,43 +253,108 @@ export function CombatScreen(): React.ReactElement {
 // Sub-views
 // ====================================================================
 
-function CombatMain({
-  player,
-  enemies,
-  piles,
-  turn,
-}: {
+interface MainViewProps {
   player: { hp: number; maxHp: number; block: number; energy: number; maxEnergy: number; statuses: Array<{ id: string; stacks: number }> };
   enemies: ReadonlyArray<EnemyActor>;
   piles: { drawPile: unknown[]; discardPile: unknown[]; exhaustPile: unknown[] };
   turn: number;
-}): React.ReactElement {
+  playerKey: string;
+  displayedHp: (key: string, fallback: number) => number;
+  displayedBlock: (key: string, fallback: number) => number;
+  flashing: (key: string) => boolean;
+}
+
+function CombatMain({
+  player, enemies, piles, turn, playerKey, displayedHp, displayedBlock, flashing,
+}: MainViewProps): React.ReactElement {
   const game = useGame();
   return (
     <Box flexDirection="column">
-      <Text bold>적 ({enemies.filter(e => e.hp > 0).length}/{enemies.length} 생존)</Text>
-      {enemies.map(e => {
-        const def = game.registries.enemies.get(e.defId);
-        const alive = e.hp > 0;
-        const intent = alive && e.intent ? `의도: ${e.intent.display.kind} ${e.intent.display.value ?? ''}` : '';
-        return (
-          <Text key={e.instanceId} color={alive ? undefined : 'gray'}>
-            {alive ? '●' : '✕'} {def.name}  HP {e.hp}/{e.maxHp}  방어 {e.block}  {intent}
-            {e.statuses.length > 0 && '  ['  + e.statuses.map(s => `${s.id}:${s.stacks}`).join(', ') + ']'}
-          </Text>
-        );
-      })}
-      <Box marginTop={1} flexDirection="column">
+      {/* Enemy stage */}
+      <Box flexDirection="row" justifyContent="space-around" marginBottom={1}>
+        {enemies.map(e => {
+          const def = game.registries.enemies.get(e.defId);
+          const alive = e.hp > 0;
+          const dispHp = displayedHp(e.instanceId, e.hp);
+          const dispBlk = displayedBlock(e.instanceId, e.block);
+          const isHit = flashing(e.instanceId);
+          return (
+            <Box
+              key={e.instanceId}
+              flexDirection="column"
+              alignItems="center"
+              borderStyle={isHit ? 'double' : 'single'}
+              borderColor={!alive ? 'gray' : isHit ? 'red' : 'white'}
+              paddingX={1}
+            >
+              {def.sprite && def.sprite.length > 0 ? (
+                <Box flexDirection="column" alignItems="center">
+                  {def.sprite.map((line, i) => (
+                    <Text
+                      key={i}
+                      color={!alive ? 'gray' : isHit ? 'red' : undefined}
+                      dimColor={!alive}
+                    >{line}</Text>
+                  ))}
+                </Box>
+              ) : (
+                <Text color={!alive ? 'gray' : undefined}>(no sprite)</Text>
+              )}
+              <Text bold color={!alive ? 'gray' : undefined}>{def.name}</Text>
+              <HpBar current={dispHp} max={e.maxHp} block={dispBlk} width={14} dim={!alive} flash={isHit} />
+              {alive && e.intent && (
+                <Text dimColor>의도: {e.intent.display.kind} {e.intent.display.value ?? ''}</Text>
+              )}
+              {alive && e.statuses.length > 0 && (
+                <Text dimColor>[{e.statuses.map(s => `${s.id}:${s.stacks}`).join(', ')}]</Text>
+              )}
+            </Box>
+          );
+        })}
+      </Box>
+
+      {/* Player stage */}
+      <Box flexDirection="column" marginTop={1}>
         <Text bold>당신</Text>
-        <Text>HP {player.hp}/{player.maxHp}  방어 {player.block}  에너지 {player.energy}/{player.maxEnergy}</Text>
+        <Box flexDirection="row" alignItems="center">
+          <HpBar
+            current={displayedHp(playerKey, player.hp)}
+            max={player.maxHp}
+            block={displayedBlock(playerKey, player.block)}
+            width={20}
+            flash={flashing(playerKey)}
+          />
+          <Text>  에너지 {player.energy}/{player.maxEnergy}</Text>
+        </Box>
         {player.statuses.length > 0 && (
           <Text dimColor>상태: {player.statuses.map(s => `${s.id}:${s.stacks}`).join(', ')}</Text>
         )}
-        <Text dimColor>덱 {piles.drawPile.length}  버림 {piles.discardPile.length}  소멸 {piles.exhaustPile.length}</Text>
+        <Text dimColor>덱 {piles.drawPile.length}  버림 {piles.discardPile.length}  소멸 {piles.exhaustPile.length}  ·  턴 {turn}</Text>
       </Box>
-      <Box marginTop={1}>
-        <Text dimColor>턴 {turn}</Text>
-      </Box>
+    </Box>
+  );
+}
+
+function HpBar({
+  current, max, block, width, dim, flash,
+}: {
+  current: number;
+  max: number;
+  block: number;
+  width: number;
+  dim?: boolean;
+  flash?: boolean;
+}): React.ReactElement {
+  const ratio = max > 0 ? Math.max(0, Math.min(1, current / max)) : 0;
+  const filled = Math.round(ratio * width);
+  const empty = width - filled;
+  const color = dim ? 'gray' : flash ? 'red' : ratio > 0.5 ? 'green' : ratio > 0.25 ? 'yellow' : 'red';
+  return (
+    <Box flexDirection="row">
+      <Text color={color as any}>{'█'.repeat(filled)}</Text>
+      <Text dimColor>{'░'.repeat(empty)}</Text>
+      <Text>  HP {current}/{max}</Text>
+      {block > 0 && <Text color="cyan">  🛡{block}</Text>}
     </Box>
   );
 }
