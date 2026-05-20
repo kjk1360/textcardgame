@@ -177,8 +177,27 @@ export function CombatScreen(): React.ReactElement {
   // Lock input during HP tween, death fade, OR while waiting for finalize
   const animating = hpAnimating || pendingResolve !== undefined;
 
-  useInput((input, _key) => {
+  const pendingEnemyTurn = run.activity.kind === 'inCombat'
+    ? run.activity.pendingEnemyTurn
+    : undefined;
+  const enemyTurnActive = pendingEnemyTurn !== undefined;
+  const enemyTurnDone = enemyTurnActive
+    && pendingEnemyTurn!.cursor >= pendingEnemyTurn!.steps.length;
+
+  useInput((input, key) => {
     if (animating) return;
+    // Enemy turn — Enter advances through queued steps; after the last
+    // step a "내 턴 시작" cue lets the player kick off the next turn.
+    if (enemyTurnActive) {
+      if (key.return) {
+        if (enemyTurnDone) {
+          dispatch(() => game.combatBeginNextPlayerTurn());
+        } else {
+          dispatch(() => game.combatStepEnemyTurn());
+        }
+      }
+      return;
+    }
     if (input === 'e' || input === 'E') {
       dispatch(() => {
         game.combatEndTurn();
@@ -242,6 +261,39 @@ export function CombatScreen(): React.ReactElement {
     />
   );
 
+  if (enemyTurnActive) {
+    const total = pendingEnemyTurn!.steps.length;
+    const cursor = pendingEnemyTurn!.cursor;
+    const current = pendingEnemyTurn!.steps[cursor];
+    return (
+      <ThreeBoxLayout
+        title={`적 턴 (${Math.min(cursor + 1, total)}/${total})${animating ? '  (애니메이션 중…)' : ''}`}
+        main={mainView}
+        bottom={
+          <Box flexDirection="column">
+            {enemyTurnDone ? (
+              <>
+                <Text bold color="green">내 턴 시작!</Text>
+                <Text dimColor>Enter ▶ 카드 뽑고 진행</Text>
+              </>
+            ) : (
+              <>
+                <Text bold color="red">⚔ {current?.description ?? ''}</Text>
+                <Text dimColor>Enter ▶ 진행{animating ? '  (애니메이션 진행 중…)' : ''}</Text>
+              </>
+            )}
+          </Box>
+        }
+        right={
+          <Box flexDirection="column">
+            <SkillStrip />
+            {focusedEnemy ? <EnemyDetail enemy={focusedEnemy} /> : null}
+          </Box>
+        }
+      />
+    );
+  }
+
   if (phase.kind === 'targeting') {
     return (
       <ThreeBoxLayout
@@ -287,7 +339,11 @@ export function CombatScreen(): React.ReactElement {
               onFocusChange={it => setFocusedHand(it?.value ?? null)}
               onSelect={it => {
                 const def = game.registries.cards.get(it.value.defId);
-                if (def.target.kind === 'enemy') {
+                // Targeting UI fires for any card that ATTACKS enemies —
+                // single ('enemy') AND multi ('allEnemies'). The anchor
+                // target matters for per-target side effects (poison
+                // application, etc.) even when damage spreads to all.
+                if (def.target.kind === 'enemy' || def.target.kind === 'allEnemies') {
                   setPhase({ kind: 'targeting', cardInstanceId: it.value.instanceId });
                 } else {
                   dispatch(() => game.combatPlayCard(it.value.instanceId));

@@ -30,6 +30,7 @@ import {
   endPlayerTurn,
   isCombatOver,
   runEnemyTurn,
+  runOneEnemyStep,
   startPlayerTurn,
   type TurnFlowContext,
   type CombatOutcome,
@@ -41,7 +42,8 @@ import {
 } from '../combat/play-card.js';
 import type { GameRegistries } from './registries.js';
 import { evalCondition, type ConditionContext } from '../conditions/evaluator.js';
-import type { ExecutionContext } from '../effects/executor.js';
+import type { CustomEffectHandler, ExecutionContext } from '../effects/executor.js';
+import { buildDefaultCustomHandlers } from '../effects/custom-handlers.js';
 import { sampleCardsFromPool } from '../cards/pool-sampler.js';
 import type { CardPoolId } from '../../types/index.js';
 import { collectSkillHooks } from '../skills/engine.js';
@@ -184,6 +186,20 @@ export type RunActivity =
        * never gets set during test runs.
        */
       pendingResolve?: { outcome: CombatOutcome };
+      /**
+       * Stepped enemy turn queue (UI mode). Set by `combatEndTurn` when
+       * `autoResolveCombat=false`; each entry corresponds to one enemy's
+       * action. The UI walks the queue via `combatStepEnemyTurn()` with
+       * Enter + animations between steps. Once `cursor === steps.length`
+       * the UI calls `combatBeginNextPlayerTurn()` to advance the turn.
+       *
+       * Tests with autoResolveCombat=true never see this — runEnemyTurn
+       * runs all enemies inline.
+       */
+      pendingEnemyTurn?: {
+        steps: ReadonlyArray<{ enemyInstanceId: string; description: string }>;
+        cursor: number;
+      };
     }
   | {
       kind: 'rewardPick';
@@ -229,6 +245,11 @@ export interface GameOptions {
    * have played out.
    */
   autoResolveCombat?: boolean;
+  /**
+   * Additional / override custom-effect handlers. Merged on top of the
+   * defaults from `buildDefaultCustomHandlers`.
+   */
+  customHandlers?: ReadonlyMap<string, CustomEffectHandler>;
 }
 
 export function createInitialState(): SessionState {
@@ -257,6 +278,8 @@ export class Game {
   readonly difficultyTable: DifficultyTable;
   readonly rng: IRandom;
   readonly autoResolveCombat: boolean;
+  /** Effect handlers for `{ kind: 'custom' }` effects (poison tick, etc.). */
+  readonly customHandlers: ReadonlyMap<string, CustomEffectHandler>;
   state: SessionState;
 
   constructor(opts: GameOptions) {
@@ -265,6 +288,7 @@ export class Game {
     this.difficultyTable = opts.difficulty ?? makeDefaultDifficultyTable();
     this.rng = makeRng(opts.rngSeed ?? `game-${Date.now()}`);
     this.autoResolveCombat = opts.autoResolveCombat ?? true;
+    this.customHandlers = buildDefaultCustomHandlers(opts.customHandlers);
     this.state = createInitialState();
   }
 
@@ -786,6 +810,29 @@ export class Game {
       return outAfterEnd;
     }
 
+    // ----- Branching for enemy turn -----
+    //
+    // autoResolveCombat=true (engine tests):
+    //   Run every enemy inline, then start next player turn — synchronous.
+    //
+    // autoResolveCombat=false (UI):
+    //   Queue the enemy actions in pendingEnemyTurn. UI walks the queue
+    //   via combatStepEnemyTurn() with Enter + animations between, then
+    //   calls combatBeginNextPlayerTurn() to advance.
+    if (!this.autoResolveCombat) {
+      const steps = run.activity.enemies
+        .filter(e => e.hp > 0)
+        .map(e => ({
+          enemyInstanceId: e.instanceId,
+          description: this.formatEnemyIntent(e),
+        }));
+      run.activity.pendingEnemyTurn = { steps, cursor: 0 };
+      // No enemies alive somehow — finalize immediately so the UI can
+      // resume picking phase.
+      if (steps.length === 0) this.beginNextPlayerTurnInternal();
+      return 'inProgress';
+    }
+
     // Enemy turn — re-derive intent scripts from enemy defs each call
     const intentScripts = this.buildIntentScripts(run.activity.enemies);
     runEnemyTurn(tfCtx, intentScripts);
@@ -803,6 +850,93 @@ export class Game {
     const drawCount = Math.max(0, this.constants.draw.perTurn - (hasSacrifice ? 1 : 0));
     startPlayerTurn(tfCtx, drawCount);
     return 'inProgress';
+  }
+
+  // --------------------------------------------------------------------
+  // Stepped enemy turn (UI mode)
+  // --------------------------------------------------------------------
+
+  /**
+   * Execute the next pending enemy action. Returns a descriptor for the
+   * UI's bottom-line announcement, plus the combat outcome after this
+   * step. The UI is responsible for playing animations between calls.
+   *
+   * Returns description=null when there's no pending step (queue empty
+   * or cursor past end — the UI should call combatBeginNextPlayerTurn
+   * in that case).
+   */
+  combatStepEnemyTurn(): { description: string | null; outcome: CombatOutcome } {
+    const run = this.requireRun();
+    if (run.activity.kind !== 'inCombat') throw new Error('Not in combat');
+    const pending = run.activity.pendingEnemyTurn;
+    if (!pending) return { description: null, outcome: 'inProgress' };
+    const step = pending.steps[pending.cursor];
+    if (!step) return { description: null, outcome: 'inProgress' };
+
+    const enemy = run.activity.enemies.find(e => e.instanceId === step.enemyInstanceId);
+    if (enemy) {
+      const tfCtx = this.buildTurnFlowContext();
+      const intentScripts = this.buildIntentScripts(run.activity.enemies);
+      runOneEnemyStep(enemy, intentScripts, tfCtx);
+    }
+    pending.cursor++;
+
+    const tfCtx = this.buildTurnFlowContext();
+    const outcome = isCombatOver(tfCtx);
+    if (outcome !== 'inProgress') {
+      // Combat ended — drop the queue and stage pendingResolve for the
+      // UI's death-fade flow.
+      run.activity.pendingEnemyTurn = undefined;
+      if (this.autoResolveCombat) {
+        return { description: step.description, outcome: this.resolveCombatEnd(outcome) };
+      }
+      run.activity.pendingResolve = { outcome };
+      return { description: step.description, outcome };
+    }
+
+    return { description: step.description, outcome: 'inProgress' };
+  }
+
+  /**
+   * After the UI has shown every queued enemy step, advance the turn
+   * and start the next player turn (draw new hand, etc.). Clears
+   * pendingEnemyTurn.
+   */
+  combatBeginNextPlayerTurn(): void {
+    const run = this.requireRun();
+    if (run.activity.kind !== 'inCombat') return;
+    if (!run.activity.pendingEnemyTurn) return;
+    this.beginNextPlayerTurnInternal();
+  }
+
+  private beginNextPlayerTurnInternal(): void {
+    const run = this.requireRun();
+    if (run.activity.kind !== 'inCombat') return;
+    run.activity.pendingEnemyTurn = undefined;
+    run.activity.turn++;
+    const tfCtx = this.buildTurnFlowContext();
+    const slot = this.requireCurrentSlot();
+    const hasSacrifice = slot.skillIds.includes('skill_sacrifice' as SkillId);
+    const drawCount = Math.max(0, this.constants.draw.perTurn - (hasSacrifice ? 1 : 0));
+    startPlayerTurn(tfCtx, drawCount);
+  }
+
+  /** Format an enemy's current intent as a short line for the UI. */
+  private formatEnemyIntent(enemy: EnemyActor): string {
+    const name = this.registries.enemies.has(enemy.defId)
+      ? this.registries.enemies.get(enemy.defId).name
+      : '적';
+    const intent = enemy.intent;
+    if (!intent) return `${name}: 행동 없음`;
+    const v = intent.display.value;
+    switch (intent.display.kind) {
+      case 'attack': return `${name}이(가) ${v ?? '?'} 피해로 공격`;
+      case 'defend': return `${name}이(가) 방어도 ${v ?? '?'} 획득`;
+      case 'buff':   return `${name}이(가) 자신을 강화`;
+      case 'debuff': return `${name}이(가) 약화 부여 시도`;
+      case 'unknown': return `${name}이(가) ???`;
+      default:       return `${name}이(가) 행동`;
+    }
   }
 
   // ====================================================================
@@ -1281,6 +1415,7 @@ export class Game {
       constants: this.constants,
       // Point at the run's actual gold holder so loseGold/gainGold mutate it.
       run: run,
+      customHandlers: this.customHandlers,
     };
   }
 
@@ -1296,6 +1431,7 @@ export class Game {
       rng: this.rng,
       constants: this.constants,
       run: run,
+      customHandlers: this.customHandlers,
     };
   }
 

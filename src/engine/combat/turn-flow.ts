@@ -16,7 +16,7 @@ import {
   reduceStatusStacks,
   type StatusRegistry,
 } from '../statuses/engine.js';
-import { executeEffects, type ExecutionContext } from '../effects/executor.js';
+import { executeEffects, type CustomEffectHandler, type ExecutionContext } from '../effects/executor.js';
 
 /**
  * Turn flow — orchestrates a combat encounter from start to end.
@@ -45,6 +45,12 @@ export interface TurnFlowContext {
   rng: IRandom;
   constants: GameConstants;
   run: { gold: number };
+  /**
+   * Custom effect handlers (poison/bleed tick, etc.). Forwarded to the
+   * executor when status hooks fire, so { kind: 'custom' } effects in
+   * status hooks resolve correctly.
+   */
+  customHandlers?: ReadonlyMap<string, CustomEffectHandler>;
 }
 
 export type CombatOutcome = 'inProgress' | 'won' | 'lost';
@@ -114,38 +120,56 @@ export function endPlayerTurn(tfCtx: TurnFlowContext): void {
 
 /**
  * Run all alive enemies' intents in order, then advance intents.
+ * Convenience loop over `runOneEnemyStep` — keep for engine-internal
+ * "everything at once" paths (tests, autoResolveCombat).
  */
 export function runEnemyTurn(
   tfCtx: TurnFlowContext,
   intentScripts: ReadonlyMap<string, IntentScript>,
 ): void {
   for (const enemy of tfCtx.enemies) {
-    if (enemy.hp <= 0) continue;
-
-    fireStatusHooks(enemy, 'onOwnerTurnStart', tfCtx);
-    if (enemy.hp <= 0) continue; // could die from bleed/poison etc.
-
-    // Reset enemy block at start of its turn (block is per-turn for enemies too)
-    enemy.block = 0;
-
-    const intent = enemy.intent;
-    if (intent) {
-      const enemyCtx: ExecutionContext = {
-        ...toExecutionContext(tfCtx),
-        source: enemy,
-        target: undefined, // not used when source is an enemy
-      };
-      executeEffects(intent.effects, enemyCtx);
-      enemy.lastIntentId = intent.id;
-    }
-
-    fireStatusHooks(enemy, 'onOwnerTurnEnd', tfCtx);
-    decayAtTurnEnd(enemy, tfCtx.statuses);
-
-    // Pick next intent (even if dead — harmless)
-    const script = intentScripts.get(enemy.instanceId);
-    if (script) enemy.intent = decideNextIntent(enemy, script, tfCtx.rng);
+    runOneEnemyStep(enemy, intentScripts, tfCtx);
   }
+}
+
+/**
+ * Run a SINGLE enemy's turn (start-of-turn hooks → intent execution →
+ * end-of-turn hooks → status decay → advance intent).
+ *
+ * Granular variant used by the UI to walk the enemy turn one enemy at
+ * a time, with animations + Enter prompts between steps. No-op if the
+ * enemy is already dead.
+ */
+export function runOneEnemyStep(
+  enemy: EnemyActor,
+  intentScripts: ReadonlyMap<string, IntentScript>,
+  tfCtx: TurnFlowContext,
+): void {
+  if (enemy.hp <= 0) return;
+
+  fireStatusHooks(enemy, 'onOwnerTurnStart', tfCtx);
+  if (enemy.hp <= 0) return; // could die from bleed/poison etc.
+
+  // Reset enemy block at start of its turn (block is per-turn for enemies too)
+  enemy.block = 0;
+
+  const intent = enemy.intent;
+  if (intent) {
+    const enemyCtx: ExecutionContext = {
+      ...toExecutionContext(tfCtx),
+      source: enemy,
+      target: undefined, // not used when source is an enemy
+    };
+    executeEffects(intent.effects, enemyCtx);
+    enemy.lastIntentId = intent.id;
+  }
+
+  fireStatusHooks(enemy, 'onOwnerTurnEnd', tfCtx);
+  decayAtTurnEnd(enemy, tfCtx.statuses);
+
+  // Pick next intent (even if dead — harmless)
+  const script = intentScripts.get(enemy.instanceId);
+  if (script) enemy.intent = decideNextIntent(enemy, script, tfCtx.rng);
 }
 
 export function isCombatOver(tfCtx: TurnFlowContext): CombatOutcome {
@@ -241,5 +265,6 @@ function toExecutionContext(tfCtx: TurnFlowContext): ExecutionContext {
     rng: tfCtx.rng,
     constants: tfCtx.constants,
     run: tfCtx.run,
+    customHandlers: tfCtx.customHandlers,
   };
 }

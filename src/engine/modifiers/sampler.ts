@@ -20,8 +20,11 @@ import type { ModifierLookup } from './resolver.js';
  *
  * Rules:
  * - Effective pools = (card.modifierPoolRefs ∪ override.add) \ override.remove
- * - Candidate weights are SUMMED if a modifier appears in multiple
- *   effective pools. (Pool entry weight overrides Modifier.weight.)
+ * - When a modifier appears in multiple effective pools, the entries are
+ *   DEDUPED (we take the MAX weight across pools). Pools are treated as
+ *   sets of options, not cumulative buckets — being in two pools is not
+ *   a "more likely" signal, just "valid in either context".
+ *   (Pool entry weight overrides Modifier.weight.)
  * - Excludes modifiers already attached to the instance (no duplicates).
  * - Excludes modifiers whose `conflictsWith` includes any attached id.
  * - Excludes modifiers whose `requires` aren't all attached.
@@ -67,13 +70,16 @@ export function sampleModifierUpgrades(
   const max = ctx.cardDef.maxModifiers;
   if (max !== undefined && cardInstance.modifiers.length >= max) return [];
 
-  // 3. Build candidate weight map (sum across pools)
+  // 3. Build candidate weight map (max across pools — dedupe semantics:
+  //    presence in N pools doesn't multiply chance; the highest-weight
+  //    pool wins for that modifier.)
   const weights = new Map<ModifierId, number>();
   for (const poolId of effectivePoolIds) {
     const pool = pools.get(poolId);
     for (const entry of pool.entries) {
       if (entry.conditional && !evalPoolCondition(entry.conditional, ctx)) continue;
-      weights.set(entry.modifierId, (weights.get(entry.modifierId) ?? 0) + entry.weight);
+      const prev = weights.get(entry.modifierId);
+      weights.set(entry.modifierId, prev === undefined ? entry.weight : Math.max(prev, entry.weight));
     }
   }
 

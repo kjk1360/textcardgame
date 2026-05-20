@@ -7,6 +7,13 @@
  * pipeline output.
  *
  * Migration note: docs/migration/01_ts_to_excel.md
+ *
+ * Modifier-pool architecture:
+ *   Each card carries a set of EffectTag tags. modifierPoolRefs are the
+ *   pools the card's upgrade event will sample from. Pools overlap on
+ *   purpose: 확산 lives in both POOL_DAGGER and POOL_SINGLE_ATTACK so any
+ *   card tagged 단검 OR 단일공격 can pull it; the sampler dedupes (no
+ *   weight stacking) — pools are sets-of-options, not buckets.
  */
 
 import type {
@@ -14,6 +21,7 @@ import type {
   CardDefinition,
   CardPool,
   CardPoolId,
+  EffectTag,
   EnemyGroupId,
   EnemyId,
   EventDefinition,
@@ -66,17 +74,94 @@ export const STATUS_WEAK: StatusDefinition = {
   damagePipeline: [{ kind: 'outgoingMul', multiplier: 0.75 }],
 };
 export const STATUS_STRENGTH: StatusDefinition = {
-  id: id<StatusId>('strength'), name: '근력', description: '공격 피해 +N',
+  id: id<StatusId>('strength'), name: '근력', description: '공격 피해 +N (영구)',
   stackingRule: 'sum', decay: { kind: 'none' },
   tags: [], hooks: [],
   damagePipeline: [{ kind: 'outgoingAdd', perStack: 1 }],
 };
 export const STATUS_DEXTERITY: StatusDefinition = {
-  id: id<StatusId>('dexterity'), name: '민첩', description: '방어도 획득 +N',
+  id: id<StatusId>('dexterity'), name: '민첩', description: '방어도 획득 +N (영구)',
   stackingRule: 'sum', decay: { kind: 'none' },
   tags: [], hooks: [],
   damagePipeline: [{ kind: 'blockGainAdd', perStack: 1 }],
 };
+
+/**
+ * 전열 임시 근력 — 카드 효과로 부여하는 "이번 턴만" 근력. 매 턴 종료 시
+ * 전체 스택이 0으로 리셋된다.
+ */
+export const STATUS_STRENGTH_TEMP: StatusDefinition = {
+  id: id<StatusId>('strength_temp'), name: '전열', description: '이번 턴 공격 피해 +N',
+  stackingRule: 'sum', decay: { kind: 'allAtEndOfTurn' },
+  tags: [], hooks: [],
+  damagePipeline: [{ kind: 'outgoingAdd', perStack: 1 }],
+};
+
+/**
+ * 중독 — 매 턴 시작 시 stack만큼 HP 감소 (방어도 무시), 그 후 stack -1.
+ * tickStatusDamage 커스텀 핸들러로 stack 수만큼 피해를 입힌다.
+ */
+export const STATUS_POISON: StatusDefinition = {
+  id: id<StatusId>('poison'), name: '중독', description: '매 턴 시작 시 stack만큼 HP 감소',
+  stackingRule: 'sum', decay: { kind: 'fixedPerTurn', amount: 1 },
+  tags: [], hooks: [
+    {
+      on: 'onOwnerTurnStart',
+      effects: [{ kind: 'custom', handlerId: 'tickStatusDamage', params: { statusId: 'poison' } }],
+    },
+  ],
+};
+
+/**
+ * 출혈 — 매 턴 종료 시 stack만큼 HP 감소 (방어도 무시), 그 후 stack -1.
+ */
+export const STATUS_BLEED: StatusDefinition = {
+  id: id<StatusId>('bleed'), name: '출혈', description: '매 턴 종료 시 stack만큼 HP 감소',
+  stackingRule: 'sum', decay: { kind: 'fixedPerTurn', amount: 1 },
+  tags: [], hooks: [
+    {
+      on: 'onOwnerTurnEnd',
+      effects: [{ kind: 'custom', handlerId: 'tickStatusDamage', params: { statusId: 'bleed' } }],
+    },
+  ],
+};
+
+/**
+ * 회피 — incoming damage × 0 (완전 무효화). 매번 공격을 받을 때 stack -1
+ * (oneStackPerTrigger). 잔여 stack은 turn end에 자기 자신을 removeStatus
+ * 해서 "이번 턴 한정" 효과를 모사한다.
+ */
+export const STATUS_EVASION: StatusDefinition = {
+  id: id<StatusId>('evasion'), name: '회피', description: '공격 1회 무시 (이번 턴 한정, 받을 때마다 1 소비)',
+  stackingRule: 'sum', decay: { kind: 'oneStackPerTrigger' },
+  tags: [], hooks: [
+    { on: 'onTakeDamage', effects: [] },
+    {
+      on: 'onOwnerTurnEnd',
+      effects: [{ kind: 'removeStatus', status: id<StatusId>('evasion'), target: 'self' }],
+    },
+  ],
+  damagePipeline: [{ kind: 'incomingMul', multiplier: 0 }],
+};
+
+// ====================================================================
+// Tags — internal-only "kind" markers on cards used to derive
+// modifierPoolRefs. Not surfaced in the UI.
+// ====================================================================
+
+const TAG_DAGGER:          EffectTag = id<EffectTag>('dagger');
+const TAG_PHYSICAL:        EffectTag = id<EffectTag>('physical');
+const TAG_SINGLE_ATTACK:   EffectTag = id<EffectTag>('single_attack');
+const TAG_SINGLE_DEFENSE:  EffectTag = id<EffectTag>('single_defense');
+
+// ====================================================================
+// Modifier pool ids
+// ====================================================================
+
+const POOL_DAGGER_ID         = id<ModifierPoolId>('pool_dagger');
+const POOL_PHYSICAL_ID       = id<ModifierPoolId>('pool_physical');
+const POOL_SINGLE_ATTACK_ID  = id<ModifierPoolId>('pool_single_attack');
+const POOL_SINGLE_DEFENSE_ID = id<ModifierPoolId>('pool_single_defense');
 
 // ====================================================================
 // Cards
@@ -85,64 +170,123 @@ export const STATUS_DEXTERITY: StatusDefinition = {
 export const CARD_STRIKE: CardDefinition = {
   id: id<CardDefId>('strike'), name: '타격',
   cost: { kind: 'fixed', value: 1 }, type: 'attack', target: { kind: 'enemy' },
-  rarity: 'starter', tags: [], keywords: [],
+  rarity: 'starter', tags: [TAG_PHYSICAL, TAG_SINGLE_ATTACK], keywords: [],
   baseDescription: '적에게 6의 피해를 줍니다.',
   baseEffects: [{ kind: 'damage', amount: 6, target: 'enemy' }],
-  modifierPoolRefs: [id<ModifierPoolId>('pool_attack_generic')],
+  modifierPoolRefs: [POOL_PHYSICAL_ID, POOL_SINGLE_ATTACK_ID],
 };
 
 export const CARD_DEFEND: CardDefinition = {
   id: id<CardDefId>('defend'), name: '수비',
   cost: { kind: 'fixed', value: 1 }, type: 'skill', target: { kind: 'self' },
-  rarity: 'starter', tags: [], keywords: [],
+  rarity: 'starter', tags: [TAG_SINGLE_DEFENSE], keywords: [],
   baseDescription: '방어도 5를 얻습니다.',
   baseEffects: [{ kind: 'gainBlock', amount: 5 }],
-  modifierPoolRefs: [],
+  modifierPoolRefs: [POOL_SINGLE_DEFENSE_ID],
 };
 
 export const CARD_HEAVY_STRIKE: CardDefinition = {
   id: id<CardDefId>('heavy_strike'), name: '강타',
   cost: { kind: 'fixed', value: 2 }, type: 'attack', target: { kind: 'enemy' },
-  rarity: 'common', tags: [], keywords: [],
+  rarity: 'common', tags: [TAG_PHYSICAL, TAG_SINGLE_ATTACK], keywords: [],
   baseDescription: '적에게 10의 피해를 줍니다.',
   baseEffects: [{ kind: 'damage', amount: 10, target: 'enemy' }],
-  modifierPoolRefs: [id<ModifierPoolId>('pool_attack_generic')],
+  modifierPoolRefs: [POOL_PHYSICAL_ID, POOL_SINGLE_ATTACK_ID],
 };
 
 export const CARD_DAGGER_THROW: CardDefinition = {
   id: id<CardDefId>('dagger_throw'), name: '단검투척',
   cost: { kind: 'fixed', value: 0 }, type: 'attack', target: { kind: 'enemy' },
-  rarity: 'common', tags: [], keywords: ['exhaust'],
+  rarity: 'common', tags: [TAG_DAGGER, TAG_PHYSICAL, TAG_SINGLE_ATTACK], keywords: ['exhaust'],
   baseDescription: '적에게 4의 피해. 소멸.',
   baseEffects: [{ kind: 'damage', amount: 4, target: 'enemy' }],
-  modifierPoolRefs: [id<ModifierPoolId>('pool_attack_generic')],
+  modifierPoolRefs: [POOL_DAGGER_ID, POOL_PHYSICAL_ID, POOL_SINGLE_ATTACK_ID],
 };
 
 export const CARD_BASH: CardDefinition = {
   id: id<CardDefId>('bash'), name: '강타·취약',
   cost: { kind: 'fixed', value: 2 }, type: 'attack', target: { kind: 'enemy' },
-  rarity: 'common', tags: [], keywords: [],
+  rarity: 'common', tags: [TAG_PHYSICAL, TAG_SINGLE_ATTACK], keywords: [],
   baseDescription: '적에게 8의 피해 + 취약 2 부여.',
   baseEffects: [
     { kind: 'damage', amount: 8, target: 'enemy' },
     { kind: 'applyStatus', status: STATUS_VULNERABLE.id, stacks: 2, target: 'enemy' },
   ],
-  modifierPoolRefs: [id<ModifierPoolId>('pool_attack_generic')],
+  modifierPoolRefs: [POOL_PHYSICAL_ID, POOL_SINGLE_ATTACK_ID],
 };
 
 // ====================================================================
 // Modifiers
 // ====================================================================
 
-export const MOD_SHARPNESS: Modifier = {
-  id: id<ModifierId>('mod_sharpness'),
-  name: '예리함', descriptionTemplate: '피해량 +5.',
-  tags: [], weight: 10,
-  transforms: [{ op: 'modifyEffect', match: { kind: 'damage' }, set: { amount: { delta: 5 } } }],
+// --- 단검 풀 ---
+
+/**
+ * 확산 — 모든 damage/damageMultiHit effect의 target을 'allEnemies'로 override.
+ * (단검 풀 + 단일공격 풀 양쪽에 들어가지만 sampler가 dedupe.)
+ */
+export const MOD_SPREAD: Modifier = {
+  id: id<ModifierId>('mod_spread'),
+  name: '확산', descriptionTemplate: '공격이 모든 적에게 적중합니다.',
+  tags: [], weight: 4,
+  transforms: [
+    { op: 'modifyEffect', match: { kind: 'damage' }, set: { target: 'allEnemies' } },
+    { op: 'modifyEffect', match: { kind: 'damageMultiHit' }, set: { target: 'allEnemies' } },
+  ],
 };
-export const MOD_BLEED: Modifier = {
-  id: id<ModifierId>('mod_bleed_on_hit'),
-  name: '출혈 부여', descriptionTemplate: '명중한 적에게 출혈을 추가합니다.',
+
+/** 독바르기 — 적중 후 적에 중독 +3 (단검 풀 한정). */
+export const MOD_POISON_COAT: Modifier = {
+  id: id<ModifierId>('mod_poison_coat'),
+  name: '독바르기', descriptionTemplate: '피해를 받은 적이 중독 3을 얻습니다.',
+  tags: [], weight: 5,
+  transforms: [{
+    op: 'appendEffect',
+    effect: { kind: 'applyStatus', status: STATUS_POISON.id, stacks: 3, target: 'enemy' },
+  }],
+};
+
+/** 단검 묘기 — exhaust 키워드 제거. */
+export const MOD_DAGGER_TRICK: Modifier = {
+  id: id<ModifierId>('mod_dagger_trick'),
+  name: '단검 묘기', descriptionTemplate: '소멸을 무시합니다.',
+  tags: [], weight: 3,
+  transforms: [{ op: 'removeKeyword', keyword: 'exhaust' }],
+};
+
+// --- 물리 풀 ---
+
+/** 연마 — 피해량 +1. */
+export const MOD_HONE: Modifier = {
+  id: id<ModifierId>('mod_hone'),
+  name: '연마', descriptionTemplate: '피해량을 1 증가시킵니다.',
+  tags: [], weight: 8,
+  transforms: [{ op: 'modifyEffect', match: { kind: 'damage' }, set: { amount: { delta: 1 } } }],
+};
+
+/** 기름칠 — 비용 -1. */
+export const MOD_OIL: Modifier = {
+  id: id<ModifierId>('mod_oil'),
+  name: '기름칠', descriptionTemplate: '비용을 1 감소시킵니다.',
+  tags: [], weight: 4,
+  transforms: [{ op: 'modifyCost', delta: -1 }],
+};
+
+/** 뾰족니 — 적중 대상에 출혈 +2. */
+export const MOD_BARB: Modifier = {
+  id: id<ModifierId>('mod_barb'),
+  name: '뾰족니', descriptionTemplate: '적중하는 대상에게 출혈을 2 부여합니다.',
+  tags: [], weight: 5,
+  transforms: [{
+    op: 'appendEffect',
+    effect: { kind: 'applyStatus', status: STATUS_BLEED.id, stacks: 2, target: 'enemy' },
+  }],
+};
+
+/** 압도 — 적중 대상에 약화 +1. */
+export const MOD_OVERPOWER: Modifier = {
+  id: id<ModifierId>('mod_overpower'),
+  name: '압도', descriptionTemplate: '적중하는 대상에게 약화를 1 부여합니다.',
   tags: [], weight: 5,
   transforms: [{
     op: 'appendEffect',
@@ -150,11 +294,93 @@ export const MOD_BLEED: Modifier = {
   }],
 };
 
-export const POOL_ATTACK_GENERIC: ModifierPool = {
-  id: id<ModifierPoolId>('pool_attack_generic'),
-  name: '공격 일반', entries: [
-    { modifierId: MOD_SHARPNESS.id, weight: 10 },
-    { modifierId: MOD_BLEED.id, weight: 5 },
+// --- 단일공격 풀 (확산은 위 단검 풀에서 정의) ---
+
+/** 지속 전투 — 사용 시 자신 HP +1 (단일공격/단일방어 양쪽). */
+export const MOD_SUSTAIN: Modifier = {
+  id: id<ModifierId>('mod_sustain'),
+  name: '지속 전투', descriptionTemplate: '사용 시 자신의 HP를 1 회복합니다 (최대 초과 X).',
+  tags: [], weight: 4,
+  transforms: [{
+    op: 'appendEffect',
+    effect: { kind: 'gainHp', amount: 1 },
+  }],
+};
+
+/** 전열 — 사용 시 이번 턴 한정 근력 +1. */
+export const MOD_RALLY: Modifier = {
+  id: id<ModifierId>('mod_rally'),
+  name: '전열', descriptionTemplate: '사용 시 이번 턴에만 근력 +1.',
+  tags: [], weight: 4,
+  transforms: [{
+    op: 'appendEffect',
+    effect: { kind: 'applyStatus', status: STATUS_STRENGTH_TEMP.id, stacks: 1, target: 'self' },
+  }],
+};
+
+// --- 단일방어 풀 ---
+
+/** 단련 — 방어도 +2. */
+export const MOD_HARDEN: Modifier = {
+  id: id<ModifierId>('mod_harden'),
+  name: '단련', descriptionTemplate: '방어도를 2 추가로 획득합니다.',
+  tags: [], weight: 6,
+  transforms: [{ op: 'modifyEffect', match: { kind: 'gainBlock' }, set: { amount: { delta: 2 } } }],
+};
+
+/** 흐릿해지기 — 이번 턴 회피 +1. */
+export const MOD_BLUR: Modifier = {
+  id: id<ModifierId>('mod_blur'),
+  name: '흐릿해지기', descriptionTemplate: '사용 시 이번 턴에만 회피 +1.',
+  tags: [], weight: 3,
+  transforms: [{
+    op: 'appendEffect',
+    effect: { kind: 'applyStatus', status: STATUS_EVASION.id, stacks: 1, target: 'self' },
+  }],
+};
+
+// ====================================================================
+// Modifier pools
+// ====================================================================
+
+export const POOL_DAGGER: ModifierPool = {
+  id: POOL_DAGGER_ID,
+  name: '단검 강화 풀',
+  entries: [
+    { modifierId: MOD_SPREAD.id,       weight: 4 },
+    { modifierId: MOD_POISON_COAT.id,  weight: 5 },
+    { modifierId: MOD_DAGGER_TRICK.id, weight: 3 },
+  ],
+};
+
+export const POOL_PHYSICAL: ModifierPool = {
+  id: POOL_PHYSICAL_ID,
+  name: '물리 강화 풀',
+  entries: [
+    { modifierId: MOD_HONE.id,      weight: 8 },
+    { modifierId: MOD_OIL.id,       weight: 4 },
+    { modifierId: MOD_BARB.id,      weight: 5 },
+    { modifierId: MOD_OVERPOWER.id, weight: 5 },
+  ],
+};
+
+export const POOL_SINGLE_ATTACK: ModifierPool = {
+  id: POOL_SINGLE_ATTACK_ID,
+  name: '단일공격 강화 풀',
+  entries: [
+    { modifierId: MOD_SPREAD.id,  weight: 4 },
+    { modifierId: MOD_SUSTAIN.id, weight: 4 },
+    { modifierId: MOD_RALLY.id,   weight: 4 },
+  ],
+};
+
+export const POOL_SINGLE_DEFENSE: ModifierPool = {
+  id: POOL_SINGLE_DEFENSE_ID,
+  name: '단일방어 강화 풀',
+  entries: [
+    { modifierId: MOD_SUSTAIN.id, weight: 4 },
+    { modifierId: MOD_HARDEN.id,  weight: 6 },
+    { modifierId: MOD_BLUR.id,    weight: 3 },
   ],
 };
 
@@ -419,6 +645,39 @@ export const FLOW_TREASURE: FlowDefinition = {
   },
 };
 
+// ---------- Upgrade shrine ----------
+
+/**
+ * Card-upgrade event. Picks one card from the current run deck and
+ * attaches one of three sampled modifiers (from the card's pools).
+ */
+export const EVENT_UPGRADE_SHRINE: EventDefinition = {
+  id: id<EventId>('upgrade_shrine'),
+  name: '강화의 제단',
+  nodeType: 'event_trigger' as any,
+  flowId: id<ScenarioId>('scenario_upgrade_shrine'),
+};
+
+export const FLOW_UPGRADE_SHRINE: FlowDefinition = {
+  id: id<ScenarioId>('scenario_upgrade_shrine'),
+  entryStepId: 'open',
+  steps: {
+    open: {
+      kind: 'dialogue',
+      text: '오래된 제단이 카드 한 장에 룬을 새겨주겠다고 한다…',
+      next: 'pick',
+    },
+    pick: {
+      kind: 'cardUpgrade',
+      source: 'currentDeck',
+      count: 1,
+      allowSkip: true,
+      next: 'end',
+    },
+    end: { kind: 'end', outcome: 'success' },
+  },
+};
+
 // ====================================================================
 // Bundle
 // ====================================================================
@@ -427,9 +686,19 @@ export function makeDemoRegistries(): GameRegistries {
   return {
     cards: makeCardRegistry([CARD_STRIKE, CARD_DEFEND, CARD_HEAVY_STRIKE, CARD_DAGGER_THROW, CARD_BASH]),
     cardPools: makeCardPoolRegistry([POOL_START_CARDS]),
-    modifiers: makeModifierRegistry([MOD_SHARPNESS, MOD_BLEED]),
-    modifierPools: makeModifierPoolRegistry([POOL_ATTACK_GENERIC]),
-    statuses: makeStatusRegistry([STATUS_VULNERABLE, STATUS_WEAK, STATUS_STRENGTH, STATUS_DEXTERITY]),
+    modifiers: makeModifierRegistry([
+      MOD_SPREAD, MOD_POISON_COAT, MOD_DAGGER_TRICK,
+      MOD_HONE, MOD_OIL, MOD_BARB, MOD_OVERPOWER,
+      MOD_SUSTAIN, MOD_RALLY,
+      MOD_HARDEN, MOD_BLUR,
+    ]),
+    modifierPools: makeModifierPoolRegistry([
+      POOL_DAGGER, POOL_PHYSICAL, POOL_SINGLE_ATTACK, POOL_SINGLE_DEFENSE,
+    ]),
+    statuses: makeStatusRegistry([
+      STATUS_VULNERABLE, STATUS_WEAK, STATUS_STRENGTH, STATUS_DEXTERITY,
+      STATUS_STRENGTH_TEMP, STATUS_POISON, STATUS_BLEED, STATUS_EVASION,
+    ]),
     skills: makeSkillRegistry([
       SKILL_LIFESTEAL, SKILL_QUICK_HANDS,
       SKILL_STRENGTH_1, SKILL_STRENGTH_2, SKILL_STRENGTH_3, SKILL_SACRIFICE,
@@ -437,7 +706,7 @@ export function makeDemoRegistries(): GameRegistries {
     skillBoxes: makeSkillBoxRegistryFromList([SKILL_BOX_LOWEST]),
     enemies: makeEnemyRegistry([ENEMY_SLIME, ENEMY_BRUTE]),
     enemyGroups: makeEnemyGroupRegistry([GROUP_SLIME_SOLO, GROUP_BRUTE_SOLO]),
-    events: makeEventRegistry([EVENT_JOURNEY_START, EVENT_SHOP, EVENT_TREASURE]),
-    flows: makeFlowRegistry([FLOW_JOURNEY_START, FLOW_SHOP, FLOW_TREASURE]),
+    events: makeEventRegistry([EVENT_JOURNEY_START, EVENT_SHOP, EVENT_TREASURE, EVENT_UPGRADE_SHRINE]),
+    flows: makeFlowRegistry([FLOW_JOURNEY_START, FLOW_SHOP, FLOW_TREASURE, FLOW_UPGRADE_SHRINE]),
   };
 }

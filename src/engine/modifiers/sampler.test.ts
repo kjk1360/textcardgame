@@ -390,10 +390,13 @@ describe('sampleModifierUpgrades', () => {
     expect(r1).toEqual(r2);
   });
 
-  it('weight summing across pools — mod_b in both pools', () => {
-    // mod_b is in pool_p (weight 5) and pool_q (weight 4) → effective 9.
-    // We can't easily assert exact weight, but can check it appears more
-    // often than something with effective weight 3 (mod_c) over many trials.
+  it('weight dedupe across pools — mod_b in both pools takes max(5,4)=5', () => {
+    // mod_b is in pool_p (weight 5) and pool_q (weight 4) → effective 5.
+    // mod_c sits only in pool_p at weight 3. Over many trials, the
+    // higher-weight mod_b should still appear more often than mod_c —
+    // and crucially less than the OLD "9 vs 3" sum-semantics would have
+    // produced (no direct assertion here, just demonstrates ordering
+    // is preserved under max-dedupe).
     let bCount = 0, cCount = 0;
     const inst = instance('c', []);
     for (let trial = 0; trial < 200; trial++) {
