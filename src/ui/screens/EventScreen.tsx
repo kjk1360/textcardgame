@@ -5,6 +5,7 @@ import { FocusList, type FocusListItem } from '../layout/FocusList.js';
 import { ThreeBoxLayout } from '../layout/ThreeBoxLayout.js';
 import { resolveCardEffects } from '../../engine/modifiers/resolver.js';
 import { isGoldMarker, goldMarkerAmount } from '../../engine/flow/skill-offer-gold.js';
+import { RightPanelWithSkills } from '../layout/SkillStrip.js';
 import type {
   CardDefId,
   CardInstance,
@@ -70,7 +71,7 @@ function DialogueView({ text, speaker }: { text: string; speaker?: string }): Re
         </Box>
       }
       bottom={<Text dimColor>Enter ▶ 다음</Text>}
-      right={null}
+      right={<RightPanelWithSkills>{null}</RightPanelWithSkills>}
     />
   );
 }
@@ -105,7 +106,7 @@ function ChoiceView({
         </Box>
       }
       bottom={<Text dimColor>↑↓ 선택  Enter 확정</Text>}
-      right={null}
+      right={<RightPanelWithSkills>{null}</RightPanelWithSkills>}
     />
   );
 }
@@ -151,7 +152,7 @@ function CardPickView({
         </Box>
       }
       bottom={<Text dimColor>↑↓ 선택  Enter 확정{status.canSkip ? '  (건너뛰기 가능)' : ''}</Text>}
-      right={focused && focused !== ('__skip__' as CardDefId) ? <CardDefDetail defId={focused} /> : null}
+      right={<RightPanelWithSkills>{focused && focused !== ('__skip__' as CardDefId) ? <CardDefDetail defId={focused} /> : null}</RightPanelWithSkills>}
     />
   );
 }
@@ -220,19 +221,21 @@ function SkillPickView({
       }
       bottom={<Text dimColor>↑↓ 선택  Enter 확정</Text>}
       right={
-        focusedIsSkill ? (
-          <Box flexDirection="column">
-            <Text bold color="cyan">{game.registries.skills.get(focused!).name}</Text>
-            <Text>등급: {game.registries.skills.get(focused!).grade}</Text>
-            <Box marginTop={1}><Text>{game.registries.skills.get(focused!).description}</Text></Box>
-          </Box>
-        ) : focusedIsGold ? (
-          <Box flexDirection="column">
-            <Text bold color="yellow">💰 골드 보상</Text>
-            <Box marginTop={1}><Text>{goldMarkerAmount(focused!)} 메타 골드를 얻습니다.</Text></Box>
-            <Box marginTop={1}><Text dimColor>(풀에 남은 스킬이 없어서 골드 옵션이 표시됨)</Text></Box>
-          </Box>
-        ) : null
+        <RightPanelWithSkills>
+          {focusedIsSkill ? (
+            <Box flexDirection="column">
+              <Text bold color="cyan">{game.registries.skills.get(focused!).name}</Text>
+              <Text>등급: {game.registries.skills.get(focused!).grade}</Text>
+              <Box marginTop={1}><Text>{game.registries.skills.get(focused!).description}</Text></Box>
+            </Box>
+          ) : focusedIsGold ? (
+            <Box flexDirection="column">
+              <Text bold color="yellow">💰 골드 보상</Text>
+              <Box marginTop={1}><Text>{goldMarkerAmount(focused!)} 메타 골드를 얻습니다.</Text></Box>
+              <Box marginTop={1}><Text dimColor>(풀에 남은 스킬이 없어서 골드 옵션이 표시됨)</Text></Box>
+            </Box>
+          ) : null}
+        </RightPanelWithSkills>
       }
     />
   );
@@ -287,7 +290,7 @@ function UpgradeTargetView({
         </Box>
       }
       bottom={<Text dimColor>↑↓ 선택  Enter 확정{status.canSkip ? '  (건너뛰기 가능)' : ''}</Text>}
-      right={focused ? <CardInstanceDetail card={focused} /> : null}
+      right={<RightPanelWithSkills>{focused ? <CardInstanceDetail card={focused} /> : null}</RightPanelWithSkills>}
     />
   );
 }
@@ -348,12 +351,16 @@ function ModifierPickView({
         </Box>
       }
       bottom={<Text dimColor>↑↓ 선택  Enter 확정</Text>}
-      right={focused ? (
-        <Box flexDirection="column">
-          <Text bold color="cyan">{game.registries.modifiers.get(focused).name}</Text>
-          <Box marginTop={1}><Text>{game.registries.modifiers.get(focused).descriptionTemplate}</Text></Box>
-        </Box>
-      ) : null}
+      right={
+        <RightPanelWithSkills>
+          {focused ? (
+            <Box flexDirection="column">
+              <Text bold color="cyan">{game.registries.modifiers.get(focused).name}</Text>
+              <Box marginTop={1}><Text>{game.registries.modifiers.get(focused).descriptionTemplate}</Text></Box>
+            </Box>
+          ) : null}
+        </RightPanelWithSkills>
+      }
     />
   );
 }

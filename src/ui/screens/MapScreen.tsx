@@ -5,6 +5,7 @@ import { FocusList, type FocusListItem } from '../layout/FocusList.js';
 import { ThreeBoxLayout } from '../layout/ThreeBoxLayout.js';
 import { edgeKey } from '../../types/index.js';
 import type { MapNode, MapState } from '../../types/index.js';
+import { SkillStrip } from '../layout/SkillStrip.js';
 
 /**
  * MapScreen — 15×15 bordered cells with emoji content + fog of war.
@@ -92,7 +93,12 @@ export function MapScreen(): React.ReactElement {
           )}
         </Box>
       }
-      right={<MapRightPanel focused={focused} />}
+      right={
+        <Box flexDirection="column">
+          <SkillStrip />
+          <MapRightPanel focused={focused} />
+        </Box>
+      }
     />
   );
 }

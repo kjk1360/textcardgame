@@ -4,6 +4,7 @@ import { useDispatch, useGame } from '../EngineContext.js';
 import { FocusList, type FocusListItem } from '../layout/FocusList.js';
 import { ThreeBoxLayout } from '../layout/ThreeBoxLayout.js';
 import type { CardDefId } from '../../types/index.js';
+import { RightPanelWithSkills } from '../layout/SkillStrip.js';
 
 /**
  * Post-combat reward screen.
@@ -58,7 +59,7 @@ export function RewardScreen(): React.ReactElement {
         </Box>
       }
       bottom={<Text dimColor>↑↓ 선택  Enter 확정</Text>}
-      right={focused ? <CardDefDetail defId={focused} /> : null}
+      right={<RightPanelWithSkills>{focused ? <CardDefDetail defId={focused} /> : null}</RightPanelWithSkills>}
     />
   );
 }

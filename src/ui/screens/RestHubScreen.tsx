@@ -7,6 +7,7 @@ import { resolveCardEffects } from '../../engine/modifiers/resolver.js';
 import { nextCapacityUpgrade, cardSellPrice } from '../../engine/meta/economy.js';
 import { upgradeInventoryCapacity } from '../../engine/meta/inventory.js';
 import type { CardInstance } from '../../types/index.js';
+import { RightPanelWithSkills } from '../layout/SkillStrip.js';
 
 /**
  * Rest Hub — non-paged menu, repeatable until 출발 chosen.
@@ -106,19 +107,21 @@ function RestMenu({
       }
       bottom={<Text dimColor>↑↓ 선택  Enter 확정  · 출발 누르면 미보관 카드 자동 골드 환산</Text>}
       right={
-        <Box flexDirection="column">
-          <Text bold color="cyan">휴식처</Text>
-          <Box marginTop={1} flexDirection="column">
-            <Text>여기서는 자유롭게 메뉴 사용</Text>
-            <Text>출발 누르기 전까지 반복 가능</Text>
-          </Box>
-          {pending.length > 0 && (
+        <RightPanelWithSkills>
+          <Box flexDirection="column">
+            <Text bold color="cyan">휴식처</Text>
             <Box marginTop={1} flexDirection="column">
-              <Text color="yellow">미정리 카드 {pending.length}장</Text>
-              <Text dimColor>(출발 시 자동 골드 환산)</Text>
+              <Text>여기서는 자유롭게 메뉴 사용</Text>
+              <Text>출발 누르기 전까지 반복 가능</Text>
             </Box>
-          )}
-        </Box>
+            {pending.length > 0 && (
+              <Box marginTop={1} flexDirection="column">
+                <Text color="yellow">미정리 카드 {pending.length}장</Text>
+                <Text dimColor>(출발 시 자동 골드 환산)</Text>
+              </Box>
+            )}
+          </Box>
+        </RightPanelWithSkills>
       }
     />
   );
@@ -184,7 +187,7 @@ function PendingDeckView({ onBack }: { onBack: () => void }): React.ReactElement
         </Box>
       }
       bottom={<Text dimColor>↑↓ 선택  Enter 확정  Esc 메뉴로</Text>}
-      right={focused ? <CardInstanceDetail card={focused} /> : null}
+      right={<RightPanelWithSkills>{focused ? <CardInstanceDetail card={focused} /> : null}</RightPanelWithSkills>}
     />
   );
 }
@@ -239,7 +242,7 @@ function InventoryView({ onBack }: { onBack: () => void }): React.ReactElement {
         </Box>
       }
       bottom={<Text dimColor>↑↓ 선택  Enter 확정  Esc 메뉴로</Text>}
-      right={focused ? <CardInstanceDetail card={focused} /> : null}
+      right={<RightPanelWithSkills>{focused ? <CardInstanceDetail card={focused} /> : null}</RightPanelWithSkills>}
     />
   );
 }

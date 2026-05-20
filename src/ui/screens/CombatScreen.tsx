@@ -4,7 +4,9 @@ import { useDispatch, useGame } from '../EngineContext.js';
 import { FocusList, type FocusListItem } from '../layout/FocusList.js';
 import { ThreeBoxLayout } from '../layout/ThreeBoxLayout.js';
 import { resolveCardEffects } from '../../engine/modifiers/resolver.js';
-import type { CardInstance, EnemyActor } from '../../types/index.js';
+import type { CardInstance, EnemyActor, PlayerActor } from '../../types/index.js';
+import { SkillStrip } from '../layout/SkillStrip.js';
+import { formatEffectPreview } from '../helpers/card-preview.js';
 
 /**
  * CombatScreen — block-art enemies + animated HP + hand visualization.
@@ -259,7 +261,12 @@ export function CombatScreen(): React.ReactElement {
             onCancel={() => setPhase({ kind: 'picking' })}
           />
         }
-        right={focusedEnemy ? <EnemyDetail enemy={focusedEnemy} /> : null}
+        right={
+          <Box flexDirection="column">
+            <SkillStrip />
+            {focusedEnemy ? <EnemyDetail enemy={focusedEnemy} /> : null}
+          </Box>
+        }
       />
     );
   }
@@ -290,7 +297,12 @@ export function CombatScreen(): React.ReactElement {
           )}
         </Box>
       }
-      right={focusedHand ? <CardInstanceDetail card={focusedHand} /> : null}
+      right={
+        <Box flexDirection="column">
+          <SkillStrip />
+          {focusedHand ? <CardInstanceDetail card={focusedHand} player={player} /> : null}
+        </Box>
+      }
     />
   );
 }
@@ -548,16 +560,27 @@ function HpBar({
 // Detail panels (right column)
 // ====================================================================
 
-function CardInstanceDetail({ card }: { card: CardInstance }): React.ReactElement {
+function CardInstanceDetail({ card, player }: { card: CardInstance; player: PlayerActor }): React.ReactElement {
   const game = useGame();
   const def = game.registries.cards.get(card.defId);
   const resolved = resolveCardEffects(def, card, game.registries.modifiers);
+  const previews = resolved.effects
+    .map(eff => formatEffectPreview(eff, player, game.registries.statuses))
+    .filter((s): s is string => s !== null);
   return (
     <Box flexDirection="column">
       <Text bold color="cyan">{def.name}</Text>
       <Text>비용: {resolved.cost.kind === 'fixed' ? resolved.cost.value : resolved.cost.kind}</Text>
       <Text>타입: {def.type}  타겟: {def.target.kind}</Text>
       <Box marginTop={1}><Text>{def.baseDescription}</Text></Box>
+      {previews.length > 0 && (
+        <Box marginTop={1} flexDirection="column">
+          <Text bold color="green">예상 효과</Text>
+          {previews.map((line, i) => (
+            <Text key={i} color="green">▸ {line}</Text>
+          ))}
+        </Box>
+      )}
       {resolved.keywords.length > 0 && (
         <Box marginTop={1}><Text color="magenta">{resolved.keywords.join(', ')}</Text></Box>
       )}

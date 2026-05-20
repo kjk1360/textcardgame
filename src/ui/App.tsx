@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Box, Text, useApp } from 'ink';
+import { Box, Text, useApp, useInput } from 'ink';
 import { join } from 'node:path';
 import { EngineProvider, useGame } from './EngineContext.js';
 import { TitleScreen } from './screens/TitleScreen.js';
@@ -13,6 +13,8 @@ import { RestHubScreen } from './screens/RestHubScreen.js';
 import { RewardScreen } from './screens/RewardScreen.js';
 import { DeathScreen } from './screens/DeathScreen.js';
 import { PassivePromoteScreen } from './screens/PassivePromoteScreen.js';
+import { DeckViewerScreen } from './screens/DeckViewerScreen.js';
+import { SkillViewerScreen } from './screens/SkillViewerScreen.js';
 import { Game, type SerializedSession } from '../engine/integration/game.js';
 import { makeDemoRegistries } from '../data/demo.js';
 import { makeSavePaths } from '../save/paths.js';
@@ -118,6 +120,8 @@ const TRANSITION_MS = 300;
  * Wraps screen swaps in a 0.3s fade so the player sees a beat between
  * map → event, combat → reward, etc., instead of an instant snap.
  */
+type ModalKind = 'deck' | 'skills' | null;
+
 function PlayingRouter({
   slotIndex,
   onBackToTitle,
@@ -148,6 +152,21 @@ function PlayingRouter({
     }, TRANSITION_MS);
     return () => clearTimeout(t);
   }, [routeKey, shownKey]);
+
+  // Modal overlays for shortcut keys (D = deck, K = skills). Captures
+  // 'd'/'k' globally while in-run; suppressed during transitions and
+  // when another modal is already open so the modal's own input handler
+  // owns the keyboard.
+  const [modal, setModal] = React.useState<ModalKind>(null);
+  useInput((input, _key) => {
+    if (transitioning) return;
+    if (modal !== null) return;
+    if (input === 'd' || input === 'D') setModal('deck');
+    else if (input === 'k' || input === 'K') setModal('skills');
+  });
+
+  if (modal === 'deck')   return <DeckViewerScreen onClose={() => setModal(null)} />;
+  if (modal === 'skills') return <SkillViewerScreen onClose={() => setModal(null)} />;
 
   if (transitioning) {
     return <TransitionFade />;
