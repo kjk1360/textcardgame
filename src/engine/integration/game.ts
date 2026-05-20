@@ -174,6 +174,16 @@ export type RunActivity =
       turn: number;
       /** Carries the flow runtime when combat was initiated via a combatStart step. */
       resumingFlow?: { runtime: FlowRuntime; eventId: EventId };
+      /**
+       * When combat reaches a terminal outcome (won/lost) but the UI hasn't
+       * finalized yet (e.g. during the death-fade animation), this field is
+       * set. The UI calls finalizeCombatEnd() once its animations complete
+       * to actually trigger resolveCombatEnd.
+       *
+       * Engine tests use autoResolveCombat=true (default in ctor) so this
+       * never gets set during test runs.
+       */
+      pendingResolve?: { outcome: CombatOutcome };
     }
   | {
       kind: 'rewardPick';
@@ -211,6 +221,14 @@ export interface GameOptions {
   rngSeed?: string;
   constants?: GameConstants;
   difficulty?: DifficultyTable;
+  /**
+   * When true (default), combat auto-resolves the moment all enemies
+   * die or the player dies — useful for tests. When false, the engine
+   * stages a pendingResolve marker on the inCombat activity, and the
+   * caller (UI) must invoke `finalizeCombatEnd()` once its animations
+   * have played out.
+   */
+  autoResolveCombat?: boolean;
 }
 
 export function createInitialState(): SessionState {
@@ -238,6 +256,7 @@ export class Game {
   readonly constants: GameConstants;
   readonly difficultyTable: DifficultyTable;
   readonly rng: IRandom;
+  readonly autoResolveCombat: boolean;
   state: SessionState;
 
   constructor(opts: GameOptions) {
@@ -245,6 +264,7 @@ export class Game {
     this.constants = opts.constants ?? DEFAULT_CONSTANTS;
     this.difficultyTable = opts.difficulty ?? makeDefaultDifficultyTable();
     this.rng = makeRng(opts.rngSeed ?? `game-${Date.now()}`);
+    this.autoResolveCombat = opts.autoResolveCombat ?? true;
     this.state = createInitialState();
   }
 
@@ -712,15 +732,34 @@ export class Game {
       executeEffects(outcome.resolved.effects, reExecCtx);
     }
 
-    // Auto-end combat on lethal
+    // End-of-combat check
     if (run.activity.kind === 'inCombat') {
       const tfCtx = this.buildTurnFlowContext();
       const combatStatus = isCombatOver(tfCtx);
       if (combatStatus !== 'inProgress') {
-        this.resolveCombatEnd(combatStatus);
+        if (this.autoResolveCombat) {
+          this.resolveCombatEnd(combatStatus);
+        } else {
+          // Defer — UI will animate then call finalizeCombatEnd()
+          run.activity.pendingResolve = { outcome: combatStatus };
+        }
       }
     }
     return outcome;
+  }
+
+  /**
+   * Called by the UI once death/win animations have played out. Triggers
+   * the deferred resolveCombatEnd that combatPlayCard / combatEndTurn
+   * staged via run.activity.pendingResolve.
+   */
+  finalizeCombatEnd(): void {
+    const run = this.state.run;
+    if (!run || run.activity.kind !== 'inCombat') return;
+    const pending = run.activity.pendingResolve;
+    if (!pending) return;
+    run.activity.pendingResolve = undefined;
+    this.resolveCombatEnd(pending.outcome);
   }
 
   combatCanPlayCard(cardInstanceId: CardInstanceId, targetEnemyId?: string) {
@@ -742,7 +781,9 @@ export class Game {
     endPlayerTurn(tfCtx);
     const outAfterEnd = isCombatOver(tfCtx);
     if (outAfterEnd !== 'inProgress') {
-      return this.resolveCombatEnd(outAfterEnd);
+      if (this.autoResolveCombat) return this.resolveCombatEnd(outAfterEnd);
+      if (run.activity.kind === 'inCombat') run.activity.pendingResolve = { outcome: outAfterEnd };
+      return outAfterEnd;
     }
 
     // Enemy turn — re-derive intent scripts from enemy defs each call
@@ -750,7 +791,9 @@ export class Game {
     runEnemyTurn(tfCtx, intentScripts);
     const outAfterEnemy = isCombatOver(tfCtx);
     if (outAfterEnemy !== 'inProgress') {
-      return this.resolveCombatEnd(outAfterEnemy);
+      if (this.autoResolveCombat) return this.resolveCombatEnd(outAfterEnemy);
+      if (run.activity.kind === 'inCombat') run.activity.pendingResolve = { outcome: outAfterEnemy };
+      return outAfterEnemy;
     }
 
     // Back to player turn — sacrifice skill reduces draw count by 1

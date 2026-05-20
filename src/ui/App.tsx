@@ -39,6 +39,10 @@ function loadOrCreateGame(): Game {
   const game = new Game({
     registries: makeDemoRegistries(),
     rngSeed: `demo-${Date.now()}`,
+    // UI plays death-fade + transition animations, so engine must NOT
+    // auto-resolve. The CombatScreen calls game.finalizeCombatEnd() once
+    // the death animation completes.
+    autoResolveCombat: false,
   });
   try {
     const raw = readResilientJson<SerializedSession>(SAVE_FILE);
@@ -106,10 +110,13 @@ function Router(): React.ReactElement {
   }
 }
 
+/** ms between unmounting the old screen and mounting the new one (cross-fade) */
+const TRANSITION_MS = 300;
+
 /**
  * PlayingRouter — derives the in-game screen from current slot + run state.
- * Re-evaluates on every render (since useGame() returns the singleton
- * and EngineProvider drives re-renders on dispatch).
+ * Wraps screen swaps in a 0.3s fade so the player sees a beat between
+ * map → event, combat → reward, etc., instead of an instant snap.
  */
 function PlayingRouter({
   slotIndex,
@@ -121,14 +128,46 @@ function PlayingRouter({
   const game = useGame();
   const slot = game.state.slots[slotIndex]!;
 
-  // Death wipe → back to title automatically
   React.useEffect(() => {
-    if (slot.state === 'empty') {
-      onBackToTitle();
-    }
+    if (slot.state === 'empty') onBackToTitle();
   }, [slot.state, onBackToTitle]);
 
-  if (slot.state === 'empty') {
+  const routeKey = computeRouteKey(slot, game.state.run);
+
+  // Track which route is currently "shown". When routeKey changes,
+  // play a brief fade-out, then update shown to match.
+  const [shownKey, setShownKey] = React.useState(routeKey);
+  const [transitioning, setTransitioning] = React.useState(false);
+
+  React.useEffect(() => {
+    if (routeKey === shownKey) return;
+    setTransitioning(true);
+    const t = setTimeout(() => {
+      setShownKey(routeKey);
+      setTransitioning(false);
+    }, TRANSITION_MS);
+    return () => clearTimeout(t);
+  }, [routeKey, shownKey]);
+
+  if (transitioning) {
+    return <TransitionFade />;
+  }
+
+  return renderRoute(shownKey, slot.state, game, onBackToTitle);
+}
+
+function computeRouteKey(slot: { state: string }, run: { activity: { kind: string } } | null): string {
+  if (slot.state === 'inRun' && run) return `inRun/${run.activity.kind}`;
+  return slot.state;
+}
+
+function renderRoute(
+  routeKey: string,
+  _slotState: string,
+  game: ReturnType<typeof useGame>,
+  onBackToTitle: () => void,
+): React.ReactElement {
+  if (routeKey === 'empty') {
     return (
       <Box flexDirection="column" padding={1}>
         <Text color="red">캐릭터가 사망했습니다.</Text>
@@ -136,29 +175,30 @@ function PlayingRouter({
       </Box>
     );
   }
-
-  if (slot.state === 'inStartPhase') {
+  if (routeKey === 'inStartPhase') {
     return <StartPhaseScreen onEnteredDungeon={() => { /* re-render covers transition */ }} />;
   }
-
-  if (slot.state === 'atRest') {
+  if (routeKey === 'atRest') {
     return <RestHubScreen onBackToTitle={onBackToTitle} />;
   }
-
-  if (slot.state === 'inRun') {
-    const run = game.state.run;
-    if (!run) {
-      return <Text color="red">Inconsistent state: inRun but no run object</Text>;
-    }
-    switch (run.activity.kind) {
-      case 'inMap':         return <MapScreen />;
-      case 'inEvent':       return <EventScreen />;
-      case 'inCombat':      return <CombatScreen />;
-      case 'rewardPick':    return <RewardScreen />;
-      case 'gameOver':      return <DeathScreen onAcknowledged={onBackToTitle} />;
-      case 'passivePromote':return <PassivePromoteScreen onCompleted={onBackToTitle} />;
-    }
+  const run = game.state.run;
+  if (!run) return <Text color="red">Inconsistent state: inRun but no run object</Text>;
+  switch (run.activity.kind) {
+    case 'inMap':         return <MapScreen />;
+    case 'inEvent':       return <EventScreen />;
+    case 'inCombat':      return <CombatScreen />;
+    case 'rewardPick':    return <RewardScreen />;
+    case 'gameOver':      return <DeathScreen onAcknowledged={onBackToTitle} />;
+    case 'passivePromote':return <PassivePromoteScreen onCompleted={onBackToTitle} />;
   }
+  return <Text dimColor>(unknown route: {routeKey})</Text>;
+}
 
-  return <Text dimColor>(unknown slot state)</Text>;
+/** Light-gray placeholder shown for TRANSITION_MS between screens. */
+function TransitionFade(): React.ReactElement {
+  return (
+    <Box flexDirection="column" justifyContent="center" alignItems="center" minHeight={20}>
+      <Text color="gray" dimColor>… 전환 중 …</Text>
+    </Box>
+  );
 }

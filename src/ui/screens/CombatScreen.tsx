@@ -29,6 +29,21 @@ type Phase =
 const TWEEN_INTERVAL_MS = 40;
 const TWEEN_FRAMES_TO_CATCH_UP = 8;
 const FLASH_DURATION_MS = 250;
+/** How long the dead-actor portrait fades to black before combat resolves. */
+const DEATH_FADE_MS = 600;
+
+/**
+ * Progressive sprite-line redaction for the death-fade animation.
+ *   progress < 0.4 → original
+ *   0.4 ≤ progress < 0.8 → non-space chars replaced with shade ░
+ *   progress ≥ 0.8 → all chars become spaces (empty portrait)
+ */
+function fadeSpriteLine(line: string, progress: number): string {
+  if (progress <= 0) return line;
+  if (progress < 0.4) return line;
+  if (progress < 0.8) return line.replace(/\S/g, '░');
+  return ' '.repeat(line.length);
+}
 
 export function CombatScreen(): React.ReactElement {
   const game = useGame();
@@ -118,13 +133,47 @@ export function CombatScreen(): React.ReactElement {
     return () => clearInterval(interval);
   }, [player.hp, player.block, enemies]);
 
-  const animating =
+  const hpAnimating =
     (displayedHp[PLAYER_ID] ?? player.hp) !== player.hp ||
     (displayedBlock[PLAYER_ID] ?? player.block) !== player.block ||
     enemies.some(e =>
       (displayedHp[e.instanceId] ?? e.hp) !== e.hp ||
       (displayedBlock[e.instanceId] ?? e.block) !== e.block,
     );
+
+  // Death-fade sequencing: once combat has a pendingResolve AND all HP
+  // tweens have caught up, start the fade timer. After DEATH_FADE_MS,
+  // call finalizeCombatEnd which actually transitions the activity.
+  const pendingResolve = run.activity.kind === 'inCombat'
+    ? run.activity.pendingResolve
+    : undefined;
+  const [fadeStartedAt, setFadeStartedAt] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (pendingResolve && !hpAnimating && fadeStartedAt === null) {
+      setFadeStartedAt(Date.now());
+    }
+    // Reset fade tracker if we somehow leave the pendingResolve state
+    if (!pendingResolve && fadeStartedAt !== null) {
+      setFadeStartedAt(null);
+    }
+  }, [pendingResolve, hpAnimating, fadeStartedAt]);
+
+  useEffect(() => {
+    if (fadeStartedAt === null) return;
+    const t = setTimeout(() => {
+      dispatch(() => game.finalizeCombatEnd());
+    }, DEATH_FADE_MS);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fadeStartedAt]);
+
+  const fadeProgress = fadeStartedAt
+    ? Math.min(1, (Date.now() - fadeStartedAt) / DEATH_FADE_MS)
+    : 0;
+
+  // Lock input during HP tween, death fade, OR while waiting for finalize
+  const animating = hpAnimating || pendingResolve !== undefined;
 
   useInput((input, _key) => {
     if (animating) return;
@@ -187,6 +236,7 @@ export function CombatScreen(): React.ReactElement {
       flashing={isFlashing}
       targetingEnemyId={targetingEnemyId ?? null}
       pickingHandId={pickingHandId ?? null}
+      fadeProgress={fadeProgress}
     />
   );
 
@@ -261,12 +311,14 @@ interface MainViewProps {
   flashing: (key: string) => boolean;
   targetingEnemyId: string | null;
   pickingHandId: string | null;
+  /** 0 = no death-fade in progress; 1 = fully faded (dead actors only). */
+  fadeProgress: number;
 }
 
 function CombatMain({
   player, enemies, piles, hand, turn, playerKey,
   displayedHp, displayedBlock, flashing,
-  targetingEnemyId, pickingHandId,
+  targetingEnemyId, pickingHandId, fadeProgress,
 }: MainViewProps): React.ReactElement {
   return (
     <Box flexDirection="column">
@@ -277,6 +329,7 @@ function CombatMain({
         displayedHp={displayedHp}
         displayedBlock={displayedBlock}
         flashing={flashing}
+        fadeProgress={fadeProgress}
       />
 
       {/* Player stage */}
@@ -311,13 +364,14 @@ function CombatMain({
 // ====================================================================
 
 function EnemyStage({
-  enemies, focusedId, displayedHp, displayedBlock, flashing,
+  enemies, focusedId, displayedHp, displayedBlock, flashing, fadeProgress,
 }: {
   enemies: ReadonlyArray<EnemyActor>;
   focusedId: string | null;
   displayedHp: (key: string, fallback: number) => number;
   displayedBlock: (key: string, fallback: number) => number;
   flashing: (key: string) => boolean;
+  fadeProgress: number;
 }): React.ReactElement {
   const game = useGame();
   return (
@@ -329,6 +383,8 @@ function EnemyStage({
         const dispBlk = displayedBlock(e.instanceId, e.block);
         const isHit = flashing(e.instanceId);
         const isFocused = focusedId === e.instanceId;
+        // Dead enemies fade their portrait to black over DEATH_FADE_MS
+        const fp = !alive ? fadeProgress : 0;
         return (
           <Box key={e.instanceId} flexDirection="column" alignItems="center">
             {/* Arrow row */}
@@ -341,7 +397,7 @@ function EnemyStage({
             </Box>
             {/* Sprite */}
             <Box
-              borderStyle={isHit ? 'double' : (isFocused ? 'single' : 'single')}
+              borderStyle={isHit ? 'double' : 'single'}
               borderColor={!alive ? 'gray' : isHit ? 'red' : isFocused ? 'yellow' : 'white'}
               paddingX={1}
               flexDirection="column"
@@ -353,7 +409,7 @@ function EnemyStage({
                     key={i}
                     color={!alive ? 'gray' : isHit ? 'red' : undefined}
                     dimColor={!alive}
-                  >{line}</Text>
+                  >{fadeSpriteLine(line, fp)}</Text>
                 ))
               ) : (
                 <Text color={!alive ? 'gray' : undefined}>(no sprite)</Text>
