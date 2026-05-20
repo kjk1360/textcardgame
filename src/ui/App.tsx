@@ -1,7 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
-import { ThreeBoxLayout } from './layout/ThreeBoxLayout.js';
-import { SkillStrip } from './layout/SkillStrip.js';
 import { join } from 'node:path';
 import { EngineProvider, useGame } from './EngineContext.js';
 import { TitleScreen } from './screens/TitleScreen.js';
@@ -29,6 +27,12 @@ import { readResilientJson, writeAtomicJson } from '../save/atomic.js';
  *   1. `Screen` enum: title / slot menu / new character / playing
  *   2. When playing: PlayingRouter reads slot.state + run.activity to
  *      pick the in-game screen (start phase / map / event / combat / rest)
+ *
+ * Scene transitions: NONE. Ink can't layer-composite old/new content, so
+ * any animated wipe/fade ends in a noticeable snap. Direct route swap
+ * reads cleaner in practice — the player perceives the change via the
+ * activity itself (combat panel vs map grid) rather than a CSS-style
+ * transition that doesn't exist in terminals.
  */
 
 type Screen =
@@ -43,9 +47,9 @@ function loadOrCreateGame(): Game {
   const game = new Game({
     registries: makeDemoRegistries(),
     rngSeed: `demo-${Date.now()}`,
-    // UI plays death-fade + transition animations, so engine must NOT
-    // auto-resolve. The CombatScreen calls game.finalizeCombatEnd() once
-    // the death animation completes.
+    // UI plays the death-fade animation on enemy portraits, so engine
+    // must NOT auto-resolve combat — CombatScreen calls
+    // game.finalizeCombatEnd() once the death fade completes.
     autoResolveCombat: false,
   });
   try {
@@ -114,24 +118,14 @@ function Router(): React.ReactElement {
   }
 }
 
-/**
- * ms between unmounting the old screen and mounting the new one.
- * Used by the MainBoxWipe scan-line — at ~600ms the wipe is brisk but
- * readable; shorter values made the snap feel buggy.
- */
-const TRANSITION_MS = 600;
-
-/** Visual dimensions of the wipe canvas — approximate the main viewport. */
-const WIPE_WIDTH = 60;
-const WIPE_HEIGHT = 18;
+type ModalKind = 'deck' | 'skills' | null;
 
 /**
  * PlayingRouter — derives the in-game screen from current slot + run state.
- * Wraps screen swaps in a 0.3s fade so the player sees a beat between
- * map → event, combat → reward, etc., instead of an instant snap.
+ *
+ * Renders directly off `routeKey` (no shownKey delay, no transition view).
+ * Modal viewers (D/K shortcuts) take over the whole frame when open.
  */
-type ModalKind = 'deck' | 'skills' | null;
-
 function PlayingRouter({
   slotIndex,
   onBackToTitle,
@@ -148,28 +142,11 @@ function PlayingRouter({
 
   const routeKey = computeRouteKey(slot, game.state.run);
 
-  // Track which route is currently "shown". When routeKey changes,
-  // play a brief fade-out, then update shown to match.
-  const [shownKey, setShownKey] = React.useState(routeKey);
-  const [transitioning, setTransitioning] = React.useState(false);
-
-  React.useEffect(() => {
-    if (routeKey === shownKey) return;
-    setTransitioning(true);
-    const t = setTimeout(() => {
-      setShownKey(routeKey);
-      setTransitioning(false);
-    }, TRANSITION_MS);
-    return () => clearTimeout(t);
-  }, [routeKey, shownKey]);
-
-  // Modal overlays for shortcut keys (D = deck, K = skills). Captures
-  // 'd'/'k' globally while in-run; suppressed during transitions and
-  // when another modal is already open so the modal's own input handler
-  // owns the keyboard.
+  // D opens deck viewer, K opens skill viewer. When a modal is open we
+  // suppress the global handler so the modal's own input wiring owns
+  // the keyboard.
   const [modal, setModal] = React.useState<ModalKind>(null);
   useInput((input, _key) => {
-    if (transitioning) return;
     if (modal !== null) return;
     if (input === 'd' || input === 'D') setModal('deck');
     else if (input === 'k' || input === 'K') setModal('skills');
@@ -178,11 +155,7 @@ function PlayingRouter({
   if (modal === 'deck')   return <DeckViewerScreen onClose={() => setModal(null)} />;
   if (modal === 'skills') return <SkillViewerScreen onClose={() => setModal(null)} />;
 
-  if (transitioning) {
-    return <TransitionWipe />;
-  }
-
-  return renderRoute(shownKey, slot.state, game, onBackToTitle);
+  return renderRoute(routeKey, slot.state, game, onBackToTitle);
 }
 
 function computeRouteKey(slot: { state: string }, run: { activity: { kind: string } } | null): string {
@@ -205,7 +178,7 @@ function renderRoute(
     );
   }
   if (routeKey === 'inStartPhase') {
-    return <StartPhaseScreen onEnteredDungeon={() => { /* re-render covers transition */ }} />;
+    return <StartPhaseScreen onEnteredDungeon={() => { /* state-driven rerender */ }} />;
   }
   if (routeKey === 'atRest') {
     return <RestHubScreen onBackToTitle={onBackToTitle} />;
@@ -221,59 +194,4 @@ function renderRoute(
     case 'passivePromote':return <PassivePromoteScreen onCompleted={onBackToTitle} />;
   }
   return <Text dimColor>(unknown route: {routeKey})</Text>;
-}
-
-/**
- * Transition shell — keeps the standard ThreeBoxLayout chrome visible
- * (so the rest of the UI doesn't jolt) while the main area plays a
- * single scan-line wipe.
- */
-function TransitionWipe(): React.ReactElement {
-  return (
-    <ThreeBoxLayout
-      title="…"
-      main={<MainBoxWipe />}
-      bottom={<Text dimColor>… 전환 중 …</Text>}
-      right={<SkillStrip />}
-    />
-  );
-}
-
-/**
- * Scan-line wipe: a single yellow ━ line starts at the bottom of the
- * main viewport and travels upward over TRANSITION_MS. Above the line
- * shows a dim ░ shade (the old scene fading out); below shows blank
- * (the new scene wiped in). Visually reads as "the next scene is being
- * unrolled upward".
- */
-function MainBoxWipe(): React.ReactElement {
-  const [progress, setProgress] = useState(0);
-
-  useEffect(() => {
-    const start = Date.now();
-    const t = setInterval(() => {
-      const p = Math.min(1, (Date.now() - start) / TRANSITION_MS);
-      setProgress(p);
-      if (p >= 1) clearInterval(t);
-    }, 30);
-    return () => clearInterval(t);
-  }, []);
-
-  // linePos: row index of the moving line. progress=0 → bottom row;
-  // progress=1 → top row.
-  const linePos = Math.max(0, Math.floor((1 - progress) * (WIPE_HEIGHT - 1)));
-
-  const rows: React.ReactElement[] = [];
-  for (let i = 0; i < WIPE_HEIGHT; i++) {
-    if (i === linePos) {
-      rows.push(<Text key={i} color="yellow" bold>{'━'.repeat(WIPE_WIDTH)}</Text>);
-    } else if (i < linePos) {
-      // Above the line — old scene residue
-      rows.push(<Text key={i} color="gray" dimColor>{'░'.repeat(WIPE_WIDTH)}</Text>);
-    } else {
-      // Below the line — already wiped, blank slate
-      rows.push(<Text key={i}> </Text>);
-    }
-  }
-  return <Box flexDirection="column">{rows}</Box>;
 }
