@@ -7,12 +7,18 @@ import { Box, Text, useInput } from 'ink';
  * Standard input model:
  *   ↑/↓ : move focus
  *   Enter : confirm focused item → onSelect(item, index)
+ *   1-9 : jump-select — focus item at that 1-based index AND confirm
+ *          (only fires for enabled items; out-of-range / disabled = no-op)
  *   Esc : optional onCancel
  *
  * Disabled items are skipped during navigation. If an item provides
  * `disabledReason`, it's shown next to the label in gray.
  *
  * Use `onFocusChange` to drive the right-side detail panel.
+ *
+ * The item index shown to the user (the "1" in "1. 카드") is the
+ * 1-based position in `items`, including disabled rows. Disabled rows
+ * can't be jump-selected but still occupy a slot.
  */
 
 export interface FocusListItem<T = unknown> {
@@ -67,9 +73,9 @@ export function FocusList<T>({
 
   useInput((input, key) => {
     if (!isActive || items.length === 0) return;
-    if (key.upArrow || input === 'k') {
+    if (key.upArrow) {
       moveFocus(-1);
-    } else if (key.downArrow || input === 'j') {
+    } else if (key.downArrow) {
       moveFocus(1);
     } else if (key.return) {
       const item = items[focused];
@@ -78,6 +84,20 @@ export function FocusList<T>({
       }
     } else if (key.escape) {
       onCancel?.();
+    } else if (/^[1-9]$/.test(input)) {
+      // Jump-select by 1-based index. Focus the item AND confirm
+      // immediately, as if the user pressed ↓×N then Enter.
+      const idx = Number(input) - 1;
+      if (idx < items.length) {
+        const item = items[idx];
+        if (item && !item.disabled) {
+          if (idx !== focused) {
+            setFocused(idx);
+            onFocusChange?.(item, idx);
+          }
+          onSelect?.(item, idx);
+        }
+      }
     }
   });
 
@@ -101,6 +121,9 @@ export function FocusList<T>({
         items.map((item, i) => {
           const isFocused = i === focused;
           const isDisabled = !!item.disabled;
+          // 1-based numeric shortcut hint. Only show 1-9; beyond that
+          // we hide the digit (jump-select still won't fire for those).
+          const numHint = i < 9 ? `${i + 1}. ` : '   ';
           return (
             <Box key={item.id}>
               <Text
@@ -108,6 +131,7 @@ export function FocusList<T>({
                 bold={isFocused && !isDisabled}
               >
                 {isFocused ? cursor : noncursor}
+                {numHint}
                 {item.label}
                 {isDisabled && item.disabledReason ? ` (${item.disabledReason})` : ''}
               </Text>

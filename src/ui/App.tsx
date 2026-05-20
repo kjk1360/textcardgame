@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
+import { ThreeBoxLayout } from './layout/ThreeBoxLayout.js';
+import { SkillStrip } from './layout/SkillStrip.js';
 import { join } from 'node:path';
 import { EngineProvider, useGame } from './EngineContext.js';
 import { TitleScreen } from './screens/TitleScreen.js';
@@ -112,8 +114,16 @@ function Router(): React.ReactElement {
   }
 }
 
-/** ms between unmounting the old screen and mounting the new one (cross-fade) */
-const TRANSITION_MS = 300;
+/**
+ * ms between unmounting the old screen and mounting the new one.
+ * Used by the MainBoxWipe scan-line — at ~600ms the wipe is brisk but
+ * readable; shorter values made the snap feel buggy.
+ */
+const TRANSITION_MS = 600;
+
+/** Visual dimensions of the wipe canvas — approximate the main viewport. */
+const WIPE_WIDTH = 60;
+const WIPE_HEIGHT = 18;
 
 /**
  * PlayingRouter — derives the in-game screen from current slot + run state.
@@ -169,7 +179,7 @@ function PlayingRouter({
   if (modal === 'skills') return <SkillViewerScreen onClose={() => setModal(null)} />;
 
   if (transitioning) {
-    return <TransitionFade />;
+    return <TransitionWipe />;
   }
 
   return renderRoute(shownKey, slot.state, game, onBackToTitle);
@@ -213,11 +223,57 @@ function renderRoute(
   return <Text dimColor>(unknown route: {routeKey})</Text>;
 }
 
-/** Light-gray placeholder shown for TRANSITION_MS between screens. */
-function TransitionFade(): React.ReactElement {
+/**
+ * Transition shell — keeps the standard ThreeBoxLayout chrome visible
+ * (so the rest of the UI doesn't jolt) while the main area plays a
+ * single scan-line wipe.
+ */
+function TransitionWipe(): React.ReactElement {
   return (
-    <Box flexDirection="column" justifyContent="center" alignItems="center" minHeight={20}>
-      <Text color="gray" dimColor>… 전환 중 …</Text>
-    </Box>
+    <ThreeBoxLayout
+      title="…"
+      main={<MainBoxWipe />}
+      bottom={<Text dimColor>… 전환 중 …</Text>}
+      right={<SkillStrip />}
+    />
   );
+}
+
+/**
+ * Scan-line wipe: a single yellow ━ line starts at the bottom of the
+ * main viewport and travels upward over TRANSITION_MS. Above the line
+ * shows a dim ░ shade (the old scene fading out); below shows blank
+ * (the new scene wiped in). Visually reads as "the next scene is being
+ * unrolled upward".
+ */
+function MainBoxWipe(): React.ReactElement {
+  const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    const start = Date.now();
+    const t = setInterval(() => {
+      const p = Math.min(1, (Date.now() - start) / TRANSITION_MS);
+      setProgress(p);
+      if (p >= 1) clearInterval(t);
+    }, 30);
+    return () => clearInterval(t);
+  }, []);
+
+  // linePos: row index of the moving line. progress=0 → bottom row;
+  // progress=1 → top row.
+  const linePos = Math.max(0, Math.floor((1 - progress) * (WIPE_HEIGHT - 1)));
+
+  const rows: React.ReactElement[] = [];
+  for (let i = 0; i < WIPE_HEIGHT; i++) {
+    if (i === linePos) {
+      rows.push(<Text key={i} color="yellow" bold>{'━'.repeat(WIPE_WIDTH)}</Text>);
+    } else if (i < linePos) {
+      // Above the line — old scene residue
+      rows.push(<Text key={i} color="gray" dimColor>{'░'.repeat(WIPE_WIDTH)}</Text>);
+    } else {
+      // Below the line — already wiped, blank slate
+      rows.push(<Text key={i}> </Text>);
+    }
+  }
+  return <Box flexDirection="column">{rows}</Box>;
 }
