@@ -49,6 +49,10 @@ export interface FlowHost {
     grade?: SkillGrade;
     poolOverride?: ReadonlyArray<SkillId>;
     count: number;
+    /** If true, skills already owned by the current character are excluded. */
+    excludeOwned?: boolean;
+    /** If set, remaining slots after exclusion get '__gold_N__' markers. */
+    fillRestWithGoldAmount?: number;
   }): SkillId[];
 
   /** Add a skill to the current character. Idempotent for non-stackable skills. */

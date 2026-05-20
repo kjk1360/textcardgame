@@ -191,6 +191,45 @@ export const SKILL_QUICK_HANDS: SkillDefinition = {
   hooks: [{ on: 'onTurnStart', effects: [{ kind: 'draw', count: 1 }] }],
 };
 
+// 4 test-pool skills (per user spec). Combat-only buffs because
+// player.statuses[] is cleared at beginCombatWithGroup.
+export const SKILL_STRENGTH_1: SkillDefinition = {
+  id: id<SkillId>('skill_strength_1'),
+  name: '힘증가', description: '전투 시작 시 근력 +1 부여 (해당 전투 한정).',
+  grade: 'low', tags: [], passiveEligible: true,
+  hooks: [{
+    on: 'onCombatStart',
+    effects: [{ kind: 'applyStatus', status: STATUS_STRENGTH.id, stacks: 1, target: 'self' }],
+  }],
+};
+export const SKILL_STRENGTH_2: SkillDefinition = {
+  id: id<SkillId>('skill_strength_2'),
+  name: '괴력', description: '전투 시작 시 근력 +2 부여 (해당 전투 한정).',
+  grade: 'mid', tags: [], passiveEligible: true,
+  hooks: [{
+    on: 'onCombatStart',
+    effects: [{ kind: 'applyStatus', status: STATUS_STRENGTH.id, stacks: 2, target: 'self' }],
+  }],
+};
+export const SKILL_STRENGTH_3: SkillDefinition = {
+  id: id<SkillId>('skill_strength_3'),
+  name: '천부의 힘', description: '전투 시작 시 근력 +3 부여 (해당 전투 한정).',
+  grade: 'high', tags: [], passiveEligible: true,
+  hooks: [{
+    on: 'onCombatStart',
+    effects: [{ kind: 'applyStatus', status: STATUS_STRENGTH.id, stacks: 3, target: 'self' }],
+  }],
+};
+export const SKILL_SACRIFICE: SkillDefinition = {
+  id: id<SkillId>('skill_sacrifice'),
+  name: '희생 분신',
+  description: '매 턴 드로우 -1. 카드 사용 시 효과가 2번 발동됨.',
+  grade: 'high', tags: [], passiveEligible: true,
+  // Mechanical effects are wired in game.ts (combatEndTurn draw modifier
+  // + combatPlayCard duplicate trigger) — hooks here are informational.
+  hooks: [],
+};
+
 export const SKILL_BOX_LOWEST: SkillBoxDefinition = {
   grade: 'lowest', priceGold: 50,
   entries: [
@@ -198,6 +237,18 @@ export const SKILL_BOX_LOWEST: SkillBoxDefinition = {
     { skillId: SKILL_QUICK_HANDS.id, weight: 1 },
   ],
 };
+
+/**
+ * Treasure / skill-book pool — listed inline in FLOW_TREASURE's
+ * skillOffer step via poolOverride. When all entries are owned, the
+ * offer falls back to gold-per-slot.
+ */
+export const TREASURE_SKILL_POOL: ReadonlyArray<SkillId> = [
+  SKILL_STRENGTH_1.id,
+  SKILL_STRENGTH_2.id,
+  SKILL_STRENGTH_3.id,
+  SKILL_SACRIFICE.id,
+];
 
 // ====================================================================
 // Enemies + groups
@@ -348,21 +399,20 @@ export const FLOW_TREASURE: FlowDefinition = {
   steps: {
     open: {
       kind: 'dialogue',
-      text: '보물 상자를 발견했다!',
+      text: '보물 상자를 발견했다! 그 속에 스킬북이…',
       next: 'gold',
     },
     gold: {
       kind: 'applyEffect',
       effects: [{ kind: 'gainGold', amount: 30 }],
-      next: 'card_offer',
+      next: 'skill_offer',
     },
-    card_offer: {
-      kind: 'cardOffer',
-      poolId: POOL_START_CARDS.id,
-      picksPerIteration: 3,
-      iterations: 1,
-      destination: 'currentDeck',
+    skill_offer: {
+      kind: 'skillOffer',
+      poolOverride: TREASURE_SKILL_POOL,
+      count: 3,
       allowSkip: true,
+      fillRestWithGoldAmount: 10,
       next: 'end',
     },
     end: { kind: 'end', outcome: 'success' },
@@ -380,7 +430,10 @@ export function makeDemoRegistries(): GameRegistries {
     modifiers: makeModifierRegistry([MOD_SHARPNESS, MOD_BLEED]),
     modifierPools: makeModifierPoolRegistry([POOL_ATTACK_GENERIC]),
     statuses: makeStatusRegistry([STATUS_VULNERABLE, STATUS_WEAK, STATUS_STRENGTH, STATUS_DEXTERITY]),
-    skills: makeSkillRegistry([SKILL_LIFESTEAL, SKILL_QUICK_HANDS]),
+    skills: makeSkillRegistry([
+      SKILL_LIFESTEAL, SKILL_QUICK_HANDS,
+      SKILL_STRENGTH_1, SKILL_STRENGTH_2, SKILL_STRENGTH_3, SKILL_SACRIFICE,
+    ]),
     skillBoxes: makeSkillBoxRegistryFromList([SKILL_BOX_LOWEST]),
     enemies: makeEnemyRegistry([ENEMY_SLIME, ENEMY_BRUTE]),
     enemyGroups: makeEnemyGroupRegistry([GROUP_SLIME_SOLO, GROUP_BRUTE_SOLO]),

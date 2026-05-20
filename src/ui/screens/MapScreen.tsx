@@ -3,6 +3,7 @@ import { Box, Text } from 'ink';
 import { useDispatch, useGame } from '../EngineContext.js';
 import { FocusList, type FocusListItem } from '../layout/FocusList.js';
 import { ThreeBoxLayout } from '../layout/ThreeBoxLayout.js';
+import { edgeKey } from '../../types/index.js';
 import type { MapNode, MapState } from '../../types/index.js';
 
 /**
@@ -43,11 +44,15 @@ export function MapScreen(): React.ReactElement {
     return () => clearInterval(t);
   }, []);
 
-  const items: FocusListItem<MapNode>[] = neighbors.map(n => ({
-    id: n.key,
-    label: `${dirLabel(map.currentNodeKey, n.key)} — ${nodeTypeLabel(n.nodeType)}`,
-    value: n,
-  }));
+  const items: FocusListItem<MapNode>[] = neighbors.map(n => {
+    const isVisitedNonRest = map.visitedNodeKeys.has(n.key) && n.nodeType !== 'rest';
+    const typeLabel = isVisitedNonRest ? '(빈방)' : nodeTypeLabel(n.nodeType);
+    return {
+      id: n.key,
+      label: `${dirLabel(map.currentNodeKey, n.key)} — ${typeLabel}`,
+      value: n,
+    };
+  });
 
   const onSelect = (item: FocusListItem<MapNode>) => {
     dispatch(() => {
@@ -144,17 +149,16 @@ function cellPrecedence(
 
 function cellBorderColor(
   cell: MapNode | undefined,
-  state: MapState,
+  _state: MapState,
   focusedKey: string | null,
-  movable: ReadonlySet<string>,
+  _movable: ReadonlySet<string>,
   blink: boolean,
 ): string {
+  // Per user spec: only the currently-FOCUSED (selected next move) cell
+  // gets a colored border. Everything else stays a subtle gray so the
+  // grid doesn't become a rainbow.
   if (!cell) return 'gray';
-  if (focusedKey === cell.key)   return blink ? 'yellow' : 'white';
-  if (cell.key === state.currentNodeKey) return 'yellow';
-  if (movable.has(cell.key))     return colorFor(cell.nodeType);
-  if (cell.nodeType === 'rest')  return 'cyan';
-  if (state.visitedNodeKeys.has(cell.key)) return 'gray';
+  if (focusedKey === cell.key) return blink ? 'yellow' : 'white';
   return 'gray';
 }
 
@@ -266,13 +270,25 @@ function renderRow(
       const above = cellAt(cx_content, cy_above);
       const below = cellAt(cx_content, cy_below);
       const color = strongestColor([above, below], map, focusedKey, movable, blink);
-      push('─', color);
+      // Mark consumed edges with ╳ at the middle char of this border span
+      const isMiddleOfBorder = (x % CELL_W === 2);
+      let char = '─';
+      if (above && below && isMiddleOfBorder) {
+        const edge = map.edges[edgeKey(above.key, below.key)];
+        if (edge?.consumed) char = '╳';
+      }
+      push(char, color);
       x++;
     } else if (onVBorder) {
       const left = cellAt(cx_left, cy_content);
       const right = cellAt(cx_right, cy_content);
       const color = strongestColor([left, right], map, focusedKey, movable, blink);
-      push('│', color);
+      let char = '│';
+      if (left && right) {
+        const edge = map.edges[edgeKey(left.key, right.key)];
+        if (edge?.consumed) char = '╳';
+      }
+      push(char, color);
       x++;
     } else {
       // Content row inside a cell. 3 chars wide: [1] [2] [3]
@@ -329,14 +345,13 @@ function emojiCellContent(
   focusedKey: string | null,
   visibleKeys: ReadonlySet<string>,
 ): ContentChunk {
-  // Off-grid / undefined
   if (!cell) {
     return { text: '░░', color: 'gray', width: 2 };
   }
   const isCurrent = cell.key === state.currentNodeKey;
   const isRest = cell.nodeType === 'rest';
   const isVisible = visibleKeys.has(cell.key);
-  const isFocused = focusedKey === cell.key;
+  const isVisited = state.visitedNodeKeys.has(cell.key);
 
   if (isCurrent) {
     return { text: '⭐', color: 'yellow', width: 2 };
@@ -345,11 +360,15 @@ function emojiCellContent(
     return { text: '⛺', color: 'cyan', width: 2 };
   }
   if (!isVisible) {
-    // Fog of war — hide everything not in line of sight
+    // Fog of war
     return { text: '░░', color: 'gray', width: 2 };
   }
-  // Visible (= physically adjacent to current)
-  void isFocused; // focus state is reflected via border color, not content
+  // Visible (= physically adjacent to current) — but if already cleared,
+  // show as "empty room" so player isn't tempted to revisit for content.
+  if (isVisited) {
+    return { text: '  ', color: 'gray', width: 2 };
+  }
+  void focusedKey;
   return { text: emojiForType(cell.nodeType), color: 'white', width: 2 };
 }
 

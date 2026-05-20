@@ -102,6 +102,14 @@ export interface SkillOfferStep {
   readonly count: number;
   readonly allowSkip?: boolean;
   readonly next: string;
+  /**
+   * When set, the offer EXCLUDES skills the character already owns.
+   * If fewer than `count` skills remain, the remaining option slots
+   * are filled with gold-pseudo-skills worth this many gold each.
+   * The pseudo-skill id pattern is '__gold_<N>__' — runtime + UI
+   * detect and route to gainGoldMeta(N).
+   */
+  readonly fillRestWithGoldAmount?: number;
 }
 
 export interface CardUpgradeStep {

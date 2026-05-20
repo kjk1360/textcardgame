@@ -4,6 +4,7 @@ import { useDispatch, useGame } from '../EngineContext.js';
 import { FocusList, type FocusListItem } from '../layout/FocusList.js';
 import { ThreeBoxLayout } from '../layout/ThreeBoxLayout.js';
 import { resolveCardEffects } from '../../engine/modifiers/resolver.js';
+import { isGoldMarker, goldMarkerAmount } from '../../engine/flow/skill-offer-gold.js';
 import type {
   CardDefId,
   CardInstance,
@@ -186,19 +187,25 @@ function SkillPickView({
   const dispatch = useDispatch();
   const [focused, setFocused] = useState<SkillId | null>(status.choices[0] ?? null);
 
-  const items: FocusListItem<SkillId>[] = status.choices.map(sid => ({
-    id: sid, label: game.registries.skills.get(sid).name, value: sid,
-  }));
+  const items: FocusListItem<SkillId>[] = status.choices.map(sid => {
+    if (isGoldMarker(sid)) {
+      return { id: sid, label: `💰 +${goldMarkerAmount(sid)} 골드`, value: sid };
+    }
+    return { id: sid, label: game.registries.skills.get(sid).name, value: sid };
+  });
   if (status.canSkip) {
     items.push({ id: '__skip__', label: '— 건너뛰기 —', value: '__skip__' as SkillId });
   }
+
+  const focusedIsGold = focused && isGoldMarker(focused);
+  const focusedIsSkill = focused && focused !== ('__skip__' as SkillId) && !isGoldMarker(focused);
 
   return (
     <ThreeBoxLayout
       title="스킬 선택"
       main={
         <Box flexDirection="column">
-          <Text>제시된 스킬 중 하나를 고르세요.</Text>
+          <Text>제시된 스킬 중 하나를 고르세요. (풀에 남은 스킬이 부족하면 골드 옵션 제공)</Text>
           <Box marginTop={1}>
             <FocusList
               items={items}
@@ -212,13 +219,21 @@ function SkillPickView({
         </Box>
       }
       bottom={<Text dimColor>↑↓ 선택  Enter 확정</Text>}
-      right={focused && focused !== ('__skip__' as SkillId) ? (
-        <Box flexDirection="column">
-          <Text bold color="cyan">{game.registries.skills.get(focused).name}</Text>
-          <Text>등급: {game.registries.skills.get(focused).grade}</Text>
-          <Box marginTop={1}><Text>{game.registries.skills.get(focused).description}</Text></Box>
-        </Box>
-      ) : null}
+      right={
+        focusedIsSkill ? (
+          <Box flexDirection="column">
+            <Text bold color="cyan">{game.registries.skills.get(focused!).name}</Text>
+            <Text>등급: {game.registries.skills.get(focused!).grade}</Text>
+            <Box marginTop={1}><Text>{game.registries.skills.get(focused!).description}</Text></Box>
+          </Box>
+        ) : focusedIsGold ? (
+          <Box flexDirection="column">
+            <Text bold color="yellow">💰 골드 보상</Text>
+            <Box marginTop={1}><Text>{goldMarkerAmount(focused!)} 메타 골드를 얻습니다.</Text></Box>
+            <Box marginTop={1}><Text dimColor>(풀에 남은 스킬이 없어서 골드 옵션이 표시됨)</Text></Box>
+          </Box>
+        ) : null
+      }
     />
   );
 }

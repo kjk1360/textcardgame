@@ -44,6 +44,8 @@ import { evalCondition, type ConditionContext } from '../conditions/evaluator.js
 import type { ExecutionContext } from '../effects/executor.js';
 import { sampleCardsFromPool } from '../cards/pool-sampler.js';
 import type { CardPoolId } from '../../types/index.js';
+import { collectSkillHooks } from '../skills/engine.js';
+import { executeEffects } from '../effects/executor.js';
 
 /**
  * Convention: the event id that always plays as the first node of a new
@@ -694,9 +696,23 @@ export class Game {
       this.registries.modifiers,
       target ? { target } : undefined,
     );
-    // Auto-end combat on lethal: if all enemies dead OR player dead,
-    // immediately resolve so the UI transitions to reward / death without
-    // requiring the player to manually end the turn.
+
+    // skill_sacrifice — re-execute the resolved effects once more
+    // (don't re-spend energy, don't re-move card from hand; that already
+    //  happened in playCard). Only run if combat is still in progress.
+    const slot = this.requireCurrentSlot();
+    if (
+      outcome.kind === 'played'
+      && slot.skillIds.includes('skill_sacrifice' as SkillId)
+      && run.activity.kind === 'inCombat'
+    ) {
+      const reExecCtx = this.buildExecutionContextForCombat();
+      reExecCtx.target = target;
+      reExecCtx.source = slot.character!;
+      executeEffects(outcome.resolved.effects, reExecCtx);
+    }
+
+    // Auto-end combat on lethal
     if (run.activity.kind === 'inCombat') {
       const tfCtx = this.buildTurnFlowContext();
       const combatStatus = isCombatOver(tfCtx);
@@ -737,9 +753,12 @@ export class Game {
       return this.resolveCombatEnd(outAfterEnemy);
     }
 
-    // Back to player turn
+    // Back to player turn — sacrifice skill reduces draw count by 1
     run.activity.turn++;
-    startPlayerTurn(tfCtx);
+    const slot = this.requireCurrentSlot();
+    const hasSacrifice = slot.skillIds.includes('skill_sacrifice' as SkillId);
+    const drawCount = Math.max(0, this.constants.draw.perTurn - (hasSacrifice ? 1 : 0));
+    startPlayerTurn(tfCtx, drawCount);
     return 'inProgress';
   }
 
@@ -901,10 +920,14 @@ export class Game {
     // Apply difficulty buffs
     applyDifficultyBuffsToEnemies(enemies, slot.difficultyLevel, this.difficultyTable, this.registries.statuses);
 
-    // Build piles + draw opening hand
+    // Build piles + draw opening hand (skill_sacrifice reduces draw by 1)
     const piles: PlayerCombatState = { hand: [], drawPile: [], discardPile: [], exhaustPile: [] };
     initFromDeck(piles, run.deck, this.rng);
-    draw(piles, this.constants.draw.perTurn + this.constants.draw.firstTurnAdditional, this.rng, this.constants.hand.hardLimit);
+    const hasSacrifice = slot.skillIds.includes('skill_sacrifice' as SkillId);
+    const openingDraw = Math.max(0,
+      this.constants.draw.perTurn + this.constants.draw.firstTurnAdditional - (hasSacrifice ? 1 : 0),
+    );
+    draw(piles, openingDraw, this.rng, this.constants.hand.hardLimit);
 
     // Reset player combat state
     slot.character!.energy = this.constants.energy.base;
@@ -925,6 +948,31 @@ export class Game {
       turn: 1,
       resumingFlow: previousFlow,
     };
+
+    // Fire onCombatStart skill hooks (e.g., 힘증가 grants strength stacks
+    // to the player for this combat only — clears at next combat start).
+    this.fireSkillHooksAtCombatBoundary('onCombatStart');
+  }
+
+  /**
+   * Collect + execute all skill hooks (character + global passives) that
+   * respond to `event`. Each hook runs with the player as source.
+   */
+  private fireSkillHooksAtCombatBoundary(event: 'onCombatStart' | 'onCombatEnd' | 'onTurnStart' | 'onTurnEnd'): void {
+    const slot = this.requireCurrentSlot();
+    const hooks = collectSkillHooks(
+      slot.skillIds,
+      this.state.global.passiveSkills,
+      event,
+      this.registries.skills,
+    );
+    if (hooks.length === 0) return;
+    const ctx = this.buildExecutionContextForCombat();
+    for (const h of hooks) {
+      const def = this.registries.skills.get(h.skillId);
+      const hook = def.hooks[h.hookIndex]!;
+      executeEffects(hook.effects, ctx);
+    }
   }
 
   private resolveCombatEnd(outcome: CombatOutcome): CombatOutcome {

@@ -535,6 +535,10 @@ export class FlowRuntime {
       grade: step.grade,
       poolOverride: step.poolOverride,
       count: step.count,
+      // When fillRestWithGoldAmount is set, host both excludes owned skills
+      // AND pads remaining slots with gold-marker pseudo-skills.
+      excludeOwned: step.fillRestWithGoldAmount !== undefined,
+      fillRestWithGoldAmount: step.fillRestWithGoldAmount,
     });
     this.cachedStatus = {
       kind: 'awaitingSkillPick',

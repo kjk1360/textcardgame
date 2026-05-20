@@ -24,6 +24,7 @@ import type {
   SkillBoxRegistry,
   SkillGrade,
 } from '../meta/skill-box.js';
+import { isGoldMarker, goldMarkerAmount, makeGoldMarker } from '../flow/skill-offer-gold.js';
 
 /**
  * Concrete FlowHost — bridges the FlowRuntime to the rest of the engine.
@@ -112,6 +113,8 @@ export class FlowHostImpl implements FlowHost {
     grade?: SkillGrade;
     poolOverride?: ReadonlyArray<SkillId>;
     count: number;
+    excludeOwned?: boolean;
+    fillRestWithGoldAmount?: number;
   }): SkillId[] {
     // poolOverride wins over grade lookup
     let candidates: SkillId[];
@@ -119,23 +122,42 @@ export class FlowHostImpl implements FlowHost {
       candidates = [...opts.poolOverride];
     } else if (opts.grade) {
       const box = this.deps.skillBoxes.get(opts.grade);
-      if (!box) return [];
-      // Re-use the skill box pool entries but without spending gold
-      candidates = box.entries.map(e => e.skillId);
+      if (!box) candidates = [];
+      else candidates = box.entries.map(e => e.skillId);
     } else {
-      // Without grade or override: union of all box pools
       const all = new Set<SkillId>();
       for (const b of this.deps.skillBoxes.all()) {
         for (const e of b.entries) all.add(e.skillId);
       }
       candidates = [...all];
     }
-    // Random N (no weight at this layer — weights are box-internal)
-    return pickN(candidates, opts.count, this.deps.rng);
+
+    // Exclude already-owned skills when requested OR when a gold fallback
+    // is configured (we never want to offer something they have).
+    if (opts.excludeOwned || opts.fillRestWithGoldAmount !== undefined) {
+      const owned = new Set(this.deps.character.skillIds);
+      candidates = candidates.filter(s => !owned.has(s));
+    }
+
+    const picked = pickN(candidates, opts.count, this.deps.rng);
+
+    // Pad with gold markers if there are still slots to fill
+    if (opts.fillRestWithGoldAmount !== undefined && picked.length < opts.count) {
+      const needed = opts.count - picked.length;
+      for (let i = 0; i < needed; i++) {
+        picked.push(makeGoldMarker(opts.fillRestWithGoldAmount));
+      }
+    }
+    return picked;
   }
 
   addSkillToCharacter(skillId: SkillId, _acquired: AcquisitionMeta): void {
-    if (this.deps.character.skillIds.includes(skillId)) return; // idempotent
+    // Gold-marker pseudo-skill → just add meta gold
+    if (isGoldMarker(skillId)) {
+      this.deps.meta.gold += goldMarkerAmount(skillId);
+      return;
+    }
+    if (this.deps.character.skillIds.includes(skillId)) return;
     this.deps.character.skillIds.push(skillId);
   }
 
