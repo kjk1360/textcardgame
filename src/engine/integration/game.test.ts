@@ -262,14 +262,15 @@ describe('Game — end-to-end cycle', () => {
     // ---- Combat: play cards until enemy dies or turns exhaust ----
     let combatSafety = 50;
     while (combatSafety-- > 0) {
+      // combatPlayCard now auto-resolves combat on lethal — activity may
+      // have transitioned away from 'inCombat'.
+      if (run.activity.kind !== 'inCombat') break;
       const hand = run.activity.piles.hand;
-      // Find a playable card
       const playable = hand.find(c => {
         const def = game.registries.cards.get(c.defId);
         return def.cost.kind === 'fixed' && def.cost.value <= game.state.slots[0]!.character!.energy;
       });
       if (!playable) {
-        // End turn
         const combatOutcome = game.combatEndTurn();
         if (combatOutcome !== 'inProgress') break;
         continue;
@@ -277,13 +278,6 @@ describe('Game — end-to-end cycle', () => {
       const def = game.registries.cards.get(playable.defId);
       const target = def.target.kind === 'enemy' ? run.activity.enemies[0]!.instanceId : undefined;
       game.combatPlayCard(playable.instanceId, target);
-      // Check end conditions after each play
-      // (combat-over check happens at endTurn — but we can also peek)
-      if (run.activity.enemies.every(e => e.hp <= 0)) {
-        // Need to call endTurn or have resolveCombatEnd trigger... let's break and force end
-        game.combatEndTurn(); // triggers resolve
-        break;
-      }
     }
     // Combat won → reward pick screen; skip to return to map
     expect(run.activity.kind).toBe('rewardPick');

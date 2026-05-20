@@ -577,24 +577,31 @@ export class Game {
     if (attempt.newlyEntered) {
       this.maybeTriggerCurrentNodeEvent();
     }
-    // Auto dead-end recovery: if no movable neighbors after this move,
-    // spawn an elite + revive a path to a previously-visited node.
-    // (Only applies when we're still in map mode — events / combat may
-    // have started.)
-    if (this.state.run?.activity.kind === 'inMap' && isDeadEnd(run.map)) {
-      const recovery = recoverDeadEnd(run.map, this.rng);
-      // Seed the new elite node's enemy group if one was promoted
-      if (recovery && recovery.elitizedNodeKey) {
-        const elite = run.map.nodes[recovery.elitizedNodeKey];
-        if (elite && !elite.enemyGroupId) {
-          const groups = this.registries.enemyGroups.all();
-          if (groups.length > 0) {
-            elite.enemyGroupId = this.rng.pick(groups).id;
-          }
+    this.ensureMapPlayable();
+    return attempt;
+  }
+
+  /**
+   * Called at every transition back to inMap. If the player is dead-ended,
+   * auto-recovers (elitizes a previously-visited node + revives a path).
+   * Also seeds an enemy group on the freshly elitized node.
+   *
+   * Idempotent — safe to call multiple times.
+   */
+  private ensureMapPlayable(): void {
+    const run = this.state.run;
+    if (!run || run.activity.kind !== 'inMap') return;
+    if (!isDeadEnd(run.map)) return;
+    const recovery = recoverDeadEnd(run.map, this.rng);
+    if (recovery && recovery.elitizedNodeKey) {
+      const elite = run.map.nodes[recovery.elitizedNodeKey];
+      if (elite && !elite.enemyGroupId) {
+        const groups = this.registries.enemyGroups.all();
+        if (groups.length > 0) {
+          elite.enemyGroupId = this.rng.pick(groups).id;
         }
       }
     }
-    return attempt;
   }
 
   checkDeadEnd(): boolean {
@@ -669,13 +676,24 @@ export class Game {
       ? run.activity.enemies.find(e => e.instanceId === targetEnemyId)
       : undefined;
     const ctx = this.buildExecutionContextForCombat();
-    return playCard(
+    const outcome = playCard(
       cardInstanceId,
       ctx,
       this.registries.cards,
       this.registries.modifiers,
       target ? { target } : undefined,
     );
+    // Auto-end combat on lethal: if all enemies dead OR player dead,
+    // immediately resolve so the UI transitions to reward / death without
+    // requiring the player to manually end the turn.
+    if (run.activity.kind === 'inCombat') {
+      const tfCtx = this.buildTurnFlowContext();
+      const combatStatus = isCombatOver(tfCtx);
+      if (combatStatus !== 'inProgress') {
+        this.resolveCombatEnd(combatStatus);
+      }
+    }
+    return outcome;
   }
 
   combatCanPlayCard(cardInstanceId: CardInstanceId, targetEnemyId?: string) {
@@ -843,6 +861,7 @@ export class Game {
       this.state.global.eventsCleared.add(eventId);
     }
     run.activity = { kind: 'inMap' };
+    this.ensureMapPlayable();
   }
 
   beginCombatWithGroup(groupId: EnemyGroupId): void {
@@ -1062,6 +1081,7 @@ export class Game {
         this.finishEvent(resumingFlow.eventId);
       }
     }
+    this.ensureMapPlayable();
   }
 
   // ====================================================================

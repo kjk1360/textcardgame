@@ -50,7 +50,7 @@ export function ThreeBoxLayout({
             borderStyle="round"
             paddingX={1}
             paddingY={0}
-            minHeight={12}
+            minHeight={28}
           >
             {main}
           </Box>
@@ -72,7 +72,7 @@ export function ThreeBoxLayout({
             borderStyle="round"
             paddingX={1}
             width={36}
-            minHeight={18}
+            minHeight={34}
           >
             {right}
           </Box>
