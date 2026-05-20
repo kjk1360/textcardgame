@@ -41,8 +41,8 @@ export function ThreeBoxLayout({
         </Box>
       )}
       <Box flexDirection="row" flexGrow={1}>
-        {/* Left column: main + bottom */}
-        <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={40}>
+        {/* Left column: main + bottom (main width +20%, height +20%) */}
+        <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={48}>
           <Box
             flexDirection="column"
             flexGrow={1}
@@ -50,7 +50,7 @@ export function ThreeBoxLayout({
             borderStyle="round"
             paddingX={1}
             paddingY={0}
-            minHeight={28}
+            minHeight={34}
           >
             {main}
           </Box>
@@ -72,7 +72,7 @@ export function ThreeBoxLayout({
             borderStyle="round"
             paddingX={1}
             width={36}
-            minHeight={34}
+            minHeight={40}
           >
             {right}
           </Box>

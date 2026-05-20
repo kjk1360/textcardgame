@@ -93,8 +93,13 @@ export function recoverDeadEnd(state: MapState, rng: IRandom): RecoveryResult | 
   const cur = state.nodes[state.currentNodeKey];
   if (!cur) return null;
 
-  // Candidates: visited nodes that are not the current node
-  const candidateKeys = [...state.visitedNodeKeys].filter(k => k !== cur.key);
+  // Candidates: visited nodes that are not the current node AND not 'rest'
+  // (the rest hub must never be replaced — it's the run's exit goal)
+  const candidateKeys = [...state.visitedNodeKeys].filter(k => {
+    if (k === cur.key) return false;
+    if (state.nodes[k]?.nodeType === 'rest') return false;
+    return true;
+  });
   if (candidateKeys.length === 0) {
     // Edge case: stuck on starting node alone. Revive any one adjacent edge.
     return forceReviveAnyAdjacentEdge(state, rng);

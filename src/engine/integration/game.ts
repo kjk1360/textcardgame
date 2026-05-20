@@ -441,12 +441,18 @@ export class Game {
     skipContentSeed?: boolean;
   }): void {
     const slot = this.requireCurrentSlot();
+    // 15×15 default: rest hub at center; start position = rest hub (player
+    // begins at home and must return there). All adjacent edges connected
+    // (edgeKeepRatio=1.0) — every cell is a node, no "missing" rooms.
+    const width = opts.map?.width ?? 15;
+    const height = opts.map?.height ?? 15;
+    const centerKey = `${Math.floor(width / 2)},${Math.floor(height / 2)}`;
     const map = generateMap({
-      width: opts.map?.width ?? 5,
-      height: opts.map?.height ?? 5,
-      startKey: opts.map?.startKey ?? '0,4',
-      restKey: opts.map?.restKey ?? '4,0',
-      edgeKeepRatio: 0.8,
+      width,
+      height,
+      startKey: opts.map?.startKey ?? centerKey,
+      restKey: opts.map?.restKey ?? centerKey,
+      edgeKeepRatio: 1.0,
       nodeDistribution: {
         combat_normal: 5,
         combat_elite: 1,
@@ -517,8 +523,13 @@ export class Game {
       ?? (isFirstRun && this.registries.events.has(STARTING_EVENT_ID) ? STARTING_EVENT_ID : null);
     if (starterId) {
       startNode.eventId = starterId;
-      const ev = this.registries.events.get(starterId);
-      startNode.nodeType = ev.nodeType;
+      // Preserve 'rest' node type — the rest hub must stay a rest hub even
+      // while it carries a one-shot starter event. Other types: take the
+      // event's nodeType to make the icon match.
+      if (startNode.nodeType !== 'rest') {
+        const ev = this.registries.events.get(starterId);
+        startNode.nodeType = ev.nodeType;
+      }
     }
 
     // Assign content to other nodes

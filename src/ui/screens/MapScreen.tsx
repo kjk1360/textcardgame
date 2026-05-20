@@ -3,24 +3,25 @@ import { Box, Text } from 'ink';
 import { useDispatch, useGame } from '../EngineContext.js';
 import { FocusList, type FocusListItem } from '../layout/FocusList.js';
 import { ThreeBoxLayout } from '../layout/ThreeBoxLayout.js';
-import { edgeKey } from '../../types/index.js';
 import type { MapNode, MapState } from '../../types/index.js';
 
 /**
- * MapScreen — bordered-cell grid + neighbor picker.
+ * MapScreen — compact 15×15 grid of cells, no connection lines.
  *
- * Each grid cell is a small Box with:
- *   - 'double' border + yellow color when it's the CURRENT player position
- *   - 'single' border + cyan + bold (blinking) when it's the FOCUSED next
- *     destination from the neighbor list
- *   - 'single' border in node-type color when reachable (not focused)
- *   - 'single' dim gray border when visited (already cleared)
- *   - 'single' very-dim gray when unknown / unreachable
+ * Cell rendering: 2 chars wide, 1 char tall. Each cell shows a 1-char
+ * marker + 1-char trailing space (for spacing density). Block / shade
+ * chars (▒ ░ ▓) used for unknown / unvisited cells.
  *
- * Edges between cells are explicit characters:
- *   - white `──` / `│` for available (not consumed)
- *   - red `··` / `·` for consumed (cannot re-traverse)
- *   - dim space when no edge exists in this map
+ * Colors:
+ *   yellow bold blink   → currently focused destination
+ *   yellow bold solid   → player's current position ('*')
+ *   cyan  bold          → rest hub (⌂) — never disappears
+ *   bright + type color → movable adjacent (M / E / B / $ / T / !)
+ *   dim gray            → visited (cleared)
+ *   dim shade           → unvisited / far
+ *
+ * Edges are NOT rendered visually. The neighbor FocusList at bottom
+ * lists which adjacent cells are still reachable.
  */
 
 export function MapScreen(): React.ReactElement {
@@ -32,7 +33,7 @@ export function MapScreen(): React.ReactElement {
 
   const [focused, setFocused] = useState<MapNode | null>(neighbors[0] ?? null);
 
-  // Blink the focused target cell at 500ms cadence
+  // Blink the focused target at 500ms cadence
   const [blink, setBlink] = useState(true);
   useEffect(() => {
     const t = setInterval(() => setBlink(b => !b), 500);
@@ -76,48 +77,49 @@ export function MapScreen(): React.ReactElement {
       bottom={
         <Box flexDirection="column">
           <Text dimColor>
-            ↑↓ 선택  Enter 이동  ·  엣지 1회용 (같은 길 두 번 못 감)  ·  '*' 나, 노란 깜박임=이동 대상
+            ↑↓ 선택  Enter 이동  ·  엣지 1회용  ·  '*' 나, ⌂ 휴식처 (목표)
           </Text>
           {isDeadEnd && (
             <Text color="red">길이 막혔습니다 — 엔진이 자동 복구합니다…</Text>
           )}
         </Box>
       }
-      right={
-        <Box flexDirection="column">
-          {focused ? (
-            <>
-              <Text bold color="cyan">{nodeTypeLabel(focused.nodeType)}</Text>
-              <Text dimColor>좌표 ({focused.x}, {focused.y})</Text>
-              {focused.eventId && (
-                <Box marginTop={1}><Text>이벤트: {focused.eventId}</Text></Box>
-              )}
-              {focused.enemyGroupId && (
-                <Box marginTop={1}><Text>적: {focused.enemyGroupId}</Text></Box>
-              )}
-              <Box marginTop={1}><Text dimColor>{nodeTypeFlavor(focused.nodeType)}</Text></Box>
-              <Box marginTop={2} flexDirection="column">
-                <Text bold>현재</Text>
-                <Text dimColor>좌표 ({map.nodes[map.currentNodeKey]?.x},{map.nodes[map.currentNodeKey]?.y})</Text>
-                <Text dimColor>방문 {map.visitedNodeKeys.size}/{Object.keys(map.nodes).length}</Text>
-              </Box>
-            </>
-          ) : (
-            <>
-              <Text dimColor>(이동 가능 노드 없음)</Text>
-              <Box marginTop={1}>
-                <Text dimColor>엔진이 길을 다시 열고 있습니다…</Text>
-              </Box>
-            </>
-          )}
-        </Box>
-      }
+      right={<MapRightPanel focused={focused} />}
     />
   );
 }
 
+function MapRightPanel({ focused }: { focused: MapNode | null }): React.ReactElement {
+  const game = useGame();
+  const run = game.state.run!;
+  const map = run.map;
+  const cur = map.nodes[map.currentNodeKey]!;
+  const visited = map.visitedNodeKeys.size;
+  const total = Object.keys(map.nodes).length;
+  return (
+    <Box flexDirection="column">
+      {focused ? (
+        <>
+          <Text bold color="cyan">{nodeTypeLabel(focused.nodeType)}</Text>
+          <Text dimColor>좌표 ({focused.x}, {focused.y})</Text>
+          {focused.eventId && <Box marginTop={1}><Text>이벤트: {focused.eventId}</Text></Box>}
+          {focused.enemyGroupId && <Box marginTop={1}><Text>적: {focused.enemyGroupId}</Text></Box>}
+          <Box marginTop={1}><Text dimColor>{nodeTypeFlavor(focused.nodeType)}</Text></Box>
+        </>
+      ) : (
+        <Text dimColor>(이동 가능 노드 없음)</Text>
+      )}
+      <Box marginTop={2} flexDirection="column">
+        <Text bold>현재</Text>
+        <Text dimColor>좌표 ({cur.x},{cur.y})  ·  {nodeTypeLabel(cur.nodeType)}</Text>
+        <Text dimColor>방문 {visited}/{total}</Text>
+      </Box>
+    </Box>
+  );
+}
+
 // ====================================================================
-// MapGrid — bordered cells in a flexbox grid
+// MapGrid — 15×15 compact cells, no edge lines
 // ====================================================================
 
 function MapGrid({ focusedKey, blink }: { focusedKey: string | null; blink: boolean }): React.ReactElement {
@@ -126,17 +128,22 @@ function MapGrid({ focusedKey, blink }: { focusedKey: string | null; blink: bool
   const map = run.map;
   const movable = new Set(game.getMovableNeighbors().map(n => n.key));
 
+  // Top frame
+  const topBorder = '▄'.repeat(map.width * 2 + 2);
+  const botBorder = '▀'.repeat(map.width * 2 + 2);
+
   const rows: React.ReactElement[] = [];
   for (let y = 0; y < map.height; y++) {
-    // Cell row (horizontal cells + horizontal edges)
     rows.push(<CellRow key={`row-${y}`} y={y} map={map} movable={movable} focusedKey={focusedKey} blink={blink} />);
-    // Vertical edge row between cells (skip after last row)
-    if (y + 1 < map.height) {
-      rows.push(<VerticalEdgeRow key={`vrow-${y}`} y={y} map={map} />);
-    }
   }
 
-  return <Box flexDirection="column">{rows}</Box>;
+  return (
+    <Box flexDirection="column">
+      <Text color="gray">{topBorder}</Text>
+      {rows}
+      <Text color="gray">{botBorder}</Text>
+    </Box>
+  );
 }
 
 function CellRow({
@@ -149,74 +156,33 @@ function CellRow({
   blink: boolean;
 }): React.ReactElement {
   const children: React.ReactElement[] = [];
+  // Left wall
+  children.push(<Text key="wl" color="gray">█</Text>);
   for (let x = 0; x < map.width; x++) {
     const key = `${x},${y}`;
     const node = map.nodes[key];
-    if (node) {
-      children.push(
-        <Cell
-          key={`cell-${key}`}
-          node={node}
-          isCurrent={key === map.currentNodeKey}
-          isMovable={movable.has(key)}
-          isVisited={map.visitedNodeKeys.has(key)}
-          isFocused={key === focusedKey}
-          blink={blink}
-        />,
-      );
-    } else {
-      children.push(<EmptyCell key={`empty-${key}`} />);
+    if (!node) {
+      children.push(<Text key={key}>  </Text>);
+      continue;
     }
-    // Horizontal edge to next cell
-    if (x + 1 < map.width) {
-      const rightKey = `${x + 1},${y}`;
-      const edge = map.edges[edgeKey(key, rightKey)];
-      children.push(
-        <HEdge
-          key={`hedge-${key}`}
-          exists={!!edge}
-          consumed={edge?.consumed ?? false}
-        />,
-      );
-    }
-  }
-  return <Box flexDirection="row">{children}</Box>;
-}
-
-function VerticalEdgeRow({
-  y, map,
-}: {
-  y: number;
-  map: MapState;
-}): React.ReactElement {
-  const children: React.ReactElement[] = [];
-  for (let x = 0; x < map.width; x++) {
-    const upKey = `${x},${y}`;
-    const downKey = `${x},${y + 1}`;
-    const edge = map.edges[edgeKey(upKey, downKey)];
     children.push(
-      <VEdgeBlock
-        key={`vedge-${upKey}`}
-        exists={!!edge}
-        consumed={edge?.consumed ?? false}
+      <CellChar
+        key={key}
+        node={node}
+        isCurrent={key === map.currentNodeKey}
+        isMovable={movable.has(key)}
+        isVisited={map.visitedNodeKeys.has(key)}
+        isFocused={key === focusedKey}
+        blink={blink}
       />,
     );
-    if (x + 1 < map.width) {
-      // Empty gap (where horizontal edge would be in cell rows)
-      children.push(<Text key={`gap-${x}`}>   </Text>);
-    }
   }
+  // Right wall
+  children.push(<Text key="wr" color="gray">█</Text>);
   return <Box flexDirection="row">{children}</Box>;
 }
 
-// ====================================================================
-// Cell + edge components
-// ====================================================================
-
-const CELL_WIDTH = 5;
-const CELL_HEIGHT = 3;
-
-function Cell({
+function CellChar({
   node, isCurrent, isMovable, isVisited, isFocused, blink,
 }: {
   node: MapNode;
@@ -226,76 +192,39 @@ function Cell({
   isFocused: boolean;
   blink: boolean;
 }): React.ReactElement {
-  const icon = isCurrent ? '*' : markerFor(node);
-  let borderColor: string;
-  let textColor: string;
+  let icon: string;
+  let color: string;
   let bold = false;
+  let dim = false;
 
   if (isCurrent) {
-    borderColor = 'yellow';
-    textColor = 'yellow';
+    icon = '* ';
+    color = 'yellow';
+    bold = true;
+  } else if (node.nodeType === 'rest') {
+    // Rest hub always visible + cyan
+    icon = '⌂ ';
+    color = 'cyan';
     bold = true;
   } else if (isFocused) {
-    borderColor = blink ? 'yellow' : 'white';
-    textColor = blink ? 'yellow' : 'white';
+    icon = `${markerFor(node)} `;
+    color = blink ? 'yellow' : 'white';
     bold = true;
   } else if (isMovable) {
-    borderColor = colorFor(node.nodeType);
-    textColor = colorFor(node.nodeType);
+    icon = `${markerFor(node)} `;
+    color = colorFor(node.nodeType);
     bold = true;
   } else if (isVisited) {
-    borderColor = 'gray';
-    textColor = 'gray';
+    icon = '· ';
+    color = 'gray';
+    dim = true;
   } else {
-    borderColor = 'gray';
-    textColor = 'gray';
+    icon = '▒▒';
+    color = 'gray';
+    dim = true;
   }
 
-  return (
-    <Box
-      borderStyle={isCurrent ? 'double' : 'single'}
-      borderColor={borderColor as any}
-      width={CELL_WIDTH}
-      height={CELL_HEIGHT}
-      alignItems="center"
-      justifyContent="center"
-    >
-      <Text color={textColor as any} bold={bold}>{icon}</Text>
-    </Box>
-  );
-}
-
-function EmptyCell(): React.ReactElement {
-  return <Box width={CELL_WIDTH} height={CELL_HEIGHT}><Text> </Text></Box>;
-}
-
-function HEdge({ exists, consumed }: { exists: boolean; consumed: boolean }): React.ReactElement {
-  // 3-line tall, 3-wide, edge drawn in middle line
-  const top = '   ';
-  const mid = !exists ? '   ' : (consumed ? '···' : '───');
-  const bot = '   ';
-  const color = !exists ? 'gray' : (consumed ? 'red' : 'white');
-  return (
-    <Box flexDirection="column">
-      <Text>{top}</Text>
-      <Text color={color as any}>{mid}</Text>
-      <Text>{bot}</Text>
-    </Box>
-  );
-}
-
-function VEdgeBlock({ exists, consumed }: { exists: boolean; consumed: boolean }): React.ReactElement {
-  // 1 line tall, CELL_WIDTH wide. Vertical bar centered.
-  const half = Math.floor(CELL_WIDTH / 2);
-  const left = ' '.repeat(half);
-  const char = !exists ? ' ' : (consumed ? '·' : '│');
-  const right = ' '.repeat(CELL_WIDTH - half - 1);
-  const color = !exists ? 'gray' : (consumed ? 'red' : 'white');
-  return (
-    <Text color={color as any}>
-      {left}{char}{right}
-    </Text>
-  );
+  return <Text color={color as any} bold={bold} dimColor={dim}>{icon}</Text>;
 }
 
 // ====================================================================
@@ -303,7 +232,7 @@ function VEdgeBlock({ exists, consumed }: { exists: boolean; consumed: boolean }
 // ====================================================================
 
 function markerFor(n: MapNode): string {
-  if (n.nodeType === 'rest')         return 'R';
+  if (n.nodeType === 'rest')         return '⌂';
   if (n.nodeType === 'combat_boss')  return 'B';
   if (n.nodeType === 'combat_elite') return 'E';
   if (n.nodeType.startsWith('combat')) return 'M';
@@ -315,7 +244,7 @@ function markerFor(n: MapNode): string {
 
 function colorFor(t: string | undefined): string {
   if (!t) return 'white';
-  if (t === 'rest') return 'green';
+  if (t === 'rest') return 'cyan';
   if (t === 'combat_boss')  return 'magenta';
   if (t === 'combat_elite') return 'red';
   if (t.startsWith('combat')) return 'red';
@@ -334,7 +263,7 @@ function nodeTypeLabel(t: string): string {
     case 'event_trigger': return '특수 이벤트';
     case 'shop':          return '상점';
     case 'treasure':      return '보물';
-    case 'rest':          return '휴식처 (탈출 노드)';
+    case 'rest':          return '휴식처 (목표 — 돌아오면 런 종료)';
     default: return t;
   }
 }

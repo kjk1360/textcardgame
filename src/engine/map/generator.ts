@@ -183,11 +183,13 @@ function pickNodeType(
   params: MapGenParams,
   rng: IRandom,
 ): NodeTypeId {
-  if (key === params.startKey) {
-    return 'event_normal' as NodeTypeId; // entry event (e.g., "여정의 시작")
-  }
+  // Rest takes precedence over start (they may be the same key — player
+  // spawns at the rest hub and must return).
   if (key === params.restKey) {
     return 'rest' as NodeTypeId;
+  }
+  if (key === params.startKey) {
+    return 'event_normal' as NodeTypeId; // entry event (e.g., "여정의 시작")
   }
   return weightedPickType(params.nodeDistribution, rng);
 }
