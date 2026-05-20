@@ -34,6 +34,14 @@ export interface FlowHost {
   sampleCardsFromPool(poolId: string, count: number): CardDefId[];
 
   /**
+   * Multi-pool variant: merge the given pools (dedupe by max weight)
+   * and sample N. Used when a cardOffer step declares `poolRefs` with
+   * optional conditional gating — the runtime resolves which refs are
+   * eligible and hands the host the final ID list to merge.
+   */
+  sampleCardsFromPools(poolIds: ReadonlyArray<string>, count: number): CardDefId[];
+
+  /**
    * Receive a CardDefId that the player picked from an offer; place it
    * in the destination (deck or inventory). Returns the freshly-minted
    * CardInstance + ok flag (false when inventory was full, etc.).

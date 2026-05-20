@@ -1,4 +1,4 @@
-import type { CardDefId, EffectTag } from './ids.js';
+import type { CardDefId, CardPoolId, EffectTag } from './ids.js';
 import type { CardKeyword, CardType, Rarity } from './card.js';
 import type { Effect } from './effect.js';
 import type { ConditionExpr } from './condition.js';
@@ -77,9 +77,36 @@ export interface ProbabilisticBranch {
   readonly chanceModifierExpr?: string;
 }
 
+/**
+ * A pool reference with an optional gating condition. Used in
+ * CardOfferStep.poolRefs to express "this pool is always available;
+ * that pool only adds if the player meets condition X".
+ *
+ * `condition` is evaluated against the live RunSnapshot/GlobalSnapshot
+ * at step-begin time — so "이전 이벤트 클리어 시 드롭 풀 추가" /
+ * "특정 카드 보유 시 단검 풀 추가" 같은 트리거가 그대로 표현됩니다.
+ */
+export interface ConditionalCardPoolRef {
+  readonly poolId: CardPoolId;
+  readonly condition?: ConditionExpr;
+}
+
 export interface CardOfferStep {
   readonly kind: 'cardOffer';
-  readonly poolId: string;
+  /**
+   * Convenience single-pool form — still supported, equivalent to
+   * `poolRefs: [{ poolId }]`. Either `poolId` or `poolRefs` must be set.
+   */
+  readonly poolId?: string;
+  /**
+   * Multi-pool form. The runtime merges every eligible pool (whose
+   * `condition` evaluates true OR is omitted) into one weighted bag
+   * and samples without replacement. A card appearing in multiple
+   * pools is deduped — weights are taken via MAX (mirroring the
+   * modifier sampler), so being in N pools is "valid in either
+   * context", not "more likely".
+   */
+  readonly poolRefs?: ReadonlyArray<ConditionalCardPoolRef>;
   readonly picksPerIteration: number;
   readonly iterations: number;
   readonly destination: 'inventory' | 'currentDeck';

@@ -400,6 +400,51 @@ export const POOL_START_CARDS: CardPool = {
   ],
 };
 
+// --------------------------------------------------------------------
+// Mock pools demonstrating set-semantic overlap.
+//
+// Same card can sit in multiple pools (here DAGGER_THROW is in
+// POOL_DAGGER_CARDS *and* POOL_ATTACK_BOOST). The multi-pool sampler
+// dedupes by max weight — being in N pools is "valid in either
+// context", not "more likely".
+//
+// Wire one of these to a cardOffer step via either:
+//   poolId: POOL_DAGGER_CARDS.id          (single, legacy form)
+//   poolRefs: [{ poolId: POOL_BASIC.id },
+//              { poolId: POOL_RARE.id, condition: { kind: 'eventCleared', eventId: ... } }]
+// --------------------------------------------------------------------
+export const POOL_CARDS_BASIC: CardPool = {
+  id: id<CardPoolId>('pool_cards_basic'),
+  name: '기본 보상 풀',
+  entries: [
+    { cardDefId: CARD_STRIKE.id, weight: 10 },
+    { cardDefId: CARD_DEFEND.id, weight: 10 },
+    { cardDefId: CARD_HEAVY_STRIKE.id, weight: 5 },
+  ],
+};
+
+export const POOL_CARDS_DAGGER: CardPool = {
+  id: id<CardPoolId>('pool_cards_dagger'),
+  name: '단검 컬렉션 풀',
+  entries: [
+    { cardDefId: CARD_DAGGER_THROW.id, weight: 10 },
+    // 추가 단검 카드들이 들어갈 자리 (data 입력 단계에서 확장)
+  ],
+};
+
+/**
+ * Rare reward pool — gated behind clearing a specific event in the run.
+ * Demo events use this with conditional poolRefs.
+ */
+export const POOL_CARDS_RARE: CardPool = {
+  id: id<CardPoolId>('pool_cards_rare'),
+  name: '드문 보상 풀',
+  entries: [
+    { cardDefId: CARD_BASH.id, weight: 6 },
+    { cardDefId: CARD_DAGGER_THROW.id, weight: 3 },  // overlap with DAGGER pool
+  ],
+};
+
 // ====================================================================
 // Skills + boxes
 // ====================================================================
@@ -645,6 +690,56 @@ export const FLOW_TREASURE: FlowDefinition = {
   },
 };
 
+// ---------- Mystery camp (demo: conditional poolRefs) ----------
+
+/**
+ * 수상한 캠프 — illustrates conditional poolRefs on cardOffer:
+ *   - Always pulls from BASIC.
+ *   - Adds DAGGER pool if the player currently holds a 단검 카드.
+ *   - Adds RARE pool only if the upgrade shrine has been cleared.
+ *
+ * Pure mock to show the data shape — feel free to rename / re-wire
+ * once real content lands.
+ */
+export const EVENT_MYSTERY_CAMP: EventDefinition = {
+  id: id<EventId>('mystery_camp'),
+  name: '수상한 캠프',
+  nodeType: 'event_trigger' as any,
+  flowId: id<ScenarioId>('scenario_mystery_camp'),
+};
+
+export const FLOW_MYSTERY_CAMP: FlowDefinition = {
+  id: id<ScenarioId>('scenario_mystery_camp'),
+  entryStepId: 'open',
+  steps: {
+    open: {
+      kind: 'dialogue',
+      text: '낯선 캠프 앞에 도착했다. 누군가 카드 한 장을 권한다.',
+      next: 'pick',
+    },
+    pick: {
+      kind: 'cardOffer',
+      poolRefs: [
+        { poolId: POOL_CARDS_BASIC.id },
+        {
+          poolId: POOL_CARDS_DAGGER.id,
+          condition: { kind: 'hasCardInDeck', defId: CARD_DAGGER_THROW.id, min: 1 },
+        },
+        {
+          poolId: POOL_CARDS_RARE.id,
+          condition: { kind: 'eventCleared', eventId: id<EventId>('upgrade_shrine') },
+        },
+      ],
+      picksPerIteration: 3,
+      iterations: 1,
+      destination: 'currentDeck',
+      allowSkip: true,
+      next: 'end',
+    },
+    end: { kind: 'end', outcome: 'success' },
+  },
+};
+
 // ---------- Upgrade shrine ----------
 
 /**
@@ -685,7 +780,10 @@ export const FLOW_UPGRADE_SHRINE: FlowDefinition = {
 export function makeDemoRegistries(): GameRegistries {
   return {
     cards: makeCardRegistry([CARD_STRIKE, CARD_DEFEND, CARD_HEAVY_STRIKE, CARD_DAGGER_THROW, CARD_BASH]),
-    cardPools: makeCardPoolRegistry([POOL_START_CARDS]),
+    cardPools: makeCardPoolRegistry([
+      POOL_START_CARDS,
+      POOL_CARDS_BASIC, POOL_CARDS_DAGGER, POOL_CARDS_RARE,
+    ]),
     modifiers: makeModifierRegistry([
       MOD_SPREAD, MOD_POISON_COAT, MOD_DAGGER_TRICK,
       MOD_HONE, MOD_OIL, MOD_BARB, MOD_OVERPOWER,
@@ -706,7 +804,13 @@ export function makeDemoRegistries(): GameRegistries {
     skillBoxes: makeSkillBoxRegistryFromList([SKILL_BOX_LOWEST]),
     enemies: makeEnemyRegistry([ENEMY_SLIME, ENEMY_BRUTE]),
     enemyGroups: makeEnemyGroupRegistry([GROUP_SLIME_SOLO, GROUP_BRUTE_SOLO]),
-    events: makeEventRegistry([EVENT_JOURNEY_START, EVENT_SHOP, EVENT_TREASURE, EVENT_UPGRADE_SHRINE]),
-    flows: makeFlowRegistry([FLOW_JOURNEY_START, FLOW_SHOP, FLOW_TREASURE, FLOW_UPGRADE_SHRINE]),
+    events: makeEventRegistry([
+      EVENT_JOURNEY_START, EVENT_SHOP, EVENT_TREASURE,
+      EVENT_UPGRADE_SHRINE, EVENT_MYSTERY_CAMP,
+    ]),
+    flows: makeFlowRegistry([
+      FLOW_JOURNEY_START, FLOW_SHOP, FLOW_TREASURE,
+      FLOW_UPGRADE_SHRINE, FLOW_MYSTERY_CAMP,
+    ]),
   };
 }

@@ -384,6 +384,7 @@ function makeMockHost(opts: {
   };
   const host: FlowHost = {
     sampleCardsFromPool: (_poolId, n) => (opts.poolCards ?? []).slice(0, n),
+    sampleCardsFromPools: (_poolIds, n) => (opts.poolCards ?? []).slice(0, n),
     attachCardToDestination: (defId, dest) => {
       log.attachedCards.push({ defId, dest });
       const inst: CardInstance = {

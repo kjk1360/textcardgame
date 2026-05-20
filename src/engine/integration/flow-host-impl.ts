@@ -12,7 +12,7 @@ import type {
   ModifierId,
   SkillId,
 } from '../../types/index.js';
-import { sampleCardsFromPool } from '../cards/pool-sampler.js';
+import { sampleCardsFromPool, sampleCardsFromPools } from '../cards/pool-sampler.js';
 import type { FlowHost } from '../flow/host.js';
 import type { CardRegistryLookup } from '../combat/play-card.js';
 import type { ModifierLookup } from '../modifiers/resolver.js';
@@ -80,6 +80,14 @@ export class FlowHostImpl implements FlowHost {
     const pool = this.deps.cardPools.get(poolId as CardPoolId);
     if (!pool) return [];
     return sampleCardsFromPool(pool, count, this.deps.rng);
+  }
+
+  sampleCardsFromPools(poolIds: ReadonlyArray<string>, count: number): CardDefId[] {
+    const pools = poolIds
+      .map(id => this.deps.cardPools.get(id as CardPoolId))
+      .filter((p): p is NonNullable<typeof p> => p !== undefined);
+    if (pools.length === 0) return [];
+    return sampleCardsFromPools(pools, count, this.deps.rng);
   }
 
   attachCardToDestination(

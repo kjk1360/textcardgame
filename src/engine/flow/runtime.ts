@@ -481,7 +481,10 @@ export class FlowRuntime {
       return;
     }
 
-    const choices = host.sampleCardsFromPool(step.poolId, step.picksPerIteration);
+    const poolIds = this.resolveCardOfferPoolIds(ctx, step);
+    const choices = poolIds.length === 1
+      ? host.sampleCardsFromPool(poolIds[0]!, step.picksPerIteration)
+      : host.sampleCardsFromPools(poolIds, step.picksPerIteration);
     this.internal!.pending = {
       kind: 'cardOffer',
       iteration: 0,
@@ -491,6 +494,28 @@ export class FlowRuntime {
       canSkip: step.allowSkip ?? false,
     };
     this.publishCardOfferStatus();
+  }
+
+  /**
+   * Resolve a CardOfferStep's effective pool ID list given the current
+   * run state. Filters `poolRefs` by condition; concatenates the legacy
+   * single `poolId` if present; dedupes (set-like). Throws when neither
+   * form is set or all conditional refs are gated out.
+   */
+  private resolveCardOfferPoolIds(
+    ctx: FlowRuntimeContext,
+    step: { poolId?: string; poolRefs?: ReadonlyArray<{ poolId: string; condition?: import('../../types/index.js').ConditionExpr }> },
+  ): string[] {
+    const ids: string[] = [];
+    if (step.poolId) ids.push(step.poolId);
+    for (const ref of step.poolRefs ?? []) {
+      if (ref.condition && !evalCondition(ref.condition, ctx.condition)) continue;
+      ids.push(ref.poolId);
+    }
+    if (ids.length === 0) {
+      throw new Error('cardOffer step has no eligible pools (poolId/poolRefs missing or all gated out)');
+    }
+    return Array.from(new Set(ids));
   }
 
   private advanceCardOfferIteration(ctx: FlowRuntimeContext): FlowStatus {
@@ -507,7 +532,10 @@ export class FlowRuntime {
     const step = this.currentStep();
     if (step.kind !== 'cardOffer') throw new Error('not cardOffer');
     const host = this.requireHost(ctx, 'cardOffer.iter');
-    pending.choices = host.sampleCardsFromPool(step.poolId, step.picksPerIteration);
+    const poolIds = this.resolveCardOfferPoolIds(ctx, step);
+    pending.choices = poolIds.length === 1
+      ? host.sampleCardsFromPool(poolIds[0]!, step.picksPerIteration)
+      : host.sampleCardsFromPools(poolIds, step.picksPerIteration);
     this.publishCardOfferStatus();
     return this.cachedStatus;
   }

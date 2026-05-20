@@ -2,11 +2,13 @@ import type { CardDefId, CardPool } from '../../types/index.js';
 import type { IRandom } from '../rng.js';
 
 /**
- * CardPool sampler — picks N CardDefIds from a CardPool with weighted
- * probability, no replacement.
+ * CardPool sampler — picks N CardDefIds from one or more CardPools
+ * with weighted probability, no replacement.
  *
- * Mirrors weightedSampleWithoutReplacement in modifiers/sampler.ts but
- * stays typed to CardDefId so the two pool worlds remain separate.
+ * Two flavors:
+ *  - `sampleCardsFromPool` (single-pool, legacy convenience)
+ *  - `sampleCardsFromPools` (multi-pool, dedupe via MAX weight —
+ *    mirrors the modifier sampler's set-of-options semantics)
  *
  * Doc: 04_event_flow_system.md §"카드 풀 (CardPool)"
  */
@@ -27,6 +29,37 @@ export function sampleCardsFromPool(
     .filter(e => !(opts?.exclude?.has(e.cardDefId)))
     .map(e => ({ id: e.cardDefId, weight: e.weight }));
   return weightedSampleCards(eligible, count, rng);
+}
+
+/**
+ * Merge multiple pools into one weighted bag and sample N cards.
+ *
+ * Dedupe semantics (matches `modifiers/sampler.ts`): when a card
+ * appears in multiple pools, its weight is the MAX across those pools.
+ * Being in N pools means "valid in either context", not "more likely".
+ *
+ * Pool ordering does not affect outcome — dedupe is deterministic by
+ * (cardDefId → max weight).
+ */
+export function sampleCardsFromPools(
+  pools: ReadonlyArray<CardPool>,
+  count: number,
+  rng: IRandom,
+  opts?: CardPoolSampleOptions,
+): CardDefId[] {
+  const weights = new Map<CardDefId, number>();
+  for (const pool of pools) {
+    for (const entry of pool.entries) {
+      if (opts?.exclude?.has(entry.cardDefId)) continue;
+      const prev = weights.get(entry.cardDefId);
+      weights.set(
+        entry.cardDefId,
+        prev === undefined ? entry.weight : Math.max(prev, entry.weight),
+      );
+    }
+  }
+  const entries = [...weights].map(([id, weight]) => ({ id, weight }));
+  return weightedSampleCards(entries, count, rng);
 }
 
 function weightedSampleCards(
