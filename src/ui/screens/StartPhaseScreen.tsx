@@ -31,17 +31,24 @@ type Stage = 'skill' | 'draft';
 
 export function StartPhaseScreen({ onEnteredDungeon }: StartPhaseScreenProps): React.ReactElement {
   const game = useGame();
+  const dispatch = useDispatch();
   const slot = game.state.slots[game.state.currentSlotIndex!]!;
   const hasInventory = game.state.global.inventory.cards.length > 0;
   const [stage, setStage] = useState<Stage>('skill');
+
+  function doEnterDungeon() {
+    // dispatch is required so the EngineProvider re-renders + persists.
+    // Without it, slot.state mutates silently and PlayingRouter never
+    // switches off StartPhaseScreen.
+    dispatch(() => game.enterDungeon({ deck: [] }));
+    onEnteredDungeon();
+  }
 
   if (stage === 'skill') {
     return (
       <SkillStage
         onAdvance={() => {
           if (!hasInventory) {
-            // Nothing to draft — depart immediately (journey_start will run
-            // for new chars; returning chars will start with empty deck)
             doEnterDungeon();
           } else {
             setStage('draft');
@@ -52,11 +59,6 @@ export function StartPhaseScreen({ onEnteredDungeon }: StartPhaseScreenProps): R
   }
 
   return <DraftStage onDepart={doEnterDungeon} />;
-
-  function doEnterDungeon() {
-    game.enterDungeon({ deck: [] });
-    onEnteredDungeon();
-  }
 }
 
 // ====================================================================
