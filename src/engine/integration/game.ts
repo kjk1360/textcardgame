@@ -580,8 +580,15 @@ export class Game {
 
     // Assign content to other nodes
     const enemyGroups = this.registries.enemyGroups.all();
+    // Random event pool excludes:
+    //   - the starter event (already placed at the start node)
+    //   - any oneShot event already cleared by this character
+    //   - events flagged `startOnly` (e.g. 여정의 시작) — those only
+    //     make sense at the start node, never as a random encounter.
     const events = this.registries.events.all().filter(e =>
-      e.id !== starterId && !(e.oneShot && this.state.global.eventsCleared.has(e.id))
+      e.id !== starterId
+        && !(e.oneShot && this.state.global.eventsCleared.has(e.id))
+        && !e.startOnly
     );
 
     for (const node of Object.values(run.map.nodes)) {

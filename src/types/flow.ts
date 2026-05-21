@@ -19,6 +19,12 @@ export interface EventDefinition {
   readonly flowId: ScenarioId;
   readonly availability?: AvailabilityRule;
   readonly oneShot?: boolean;
+  /**
+   * When true, this event is excluded from the random event-node pool
+   * during seedMapContent. Use for events that only make sense at the
+   * fixed start node (여정의 시작 etc.) so they don't pop up mid-run.
+   */
+  readonly startOnly?: boolean;
 }
 
 export interface AvailabilityRule {

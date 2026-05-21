@@ -19,6 +19,8 @@ export const EVENT_JOURNEY_START: EventDefinition = {
   nodeType: 'event_trigger' as any,
   flowId: id<ScenarioId>('scenario_journey_start'),
   oneShot: false,
+  // Only at the start node — never picked for random event tiles.
+  startOnly: true,
 };
 
 export const FLOW_JOURNEY_START: FlowDefinition = {
