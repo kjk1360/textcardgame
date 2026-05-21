@@ -8,7 +8,8 @@
  *   Rare      → 하츠네 미쿠 머리색 청록 (#39c5bb, 파랑에 약간 더 가까운)
  *   Legendary → 빨강에 가까운 핑크-레드 (#ff5577)
  *
- * Brackets: `《 》` (사각 가운데 따옴표). 회색·청록·붉은색 다 잘 보임.
+ * Brackets: `❮ ❯` (heavy left/right pointing angle quotation marks).
+ * 반각(1-cell)이라서 한글 옆에 붙어도 전각 《》 처럼 패딩이 생기지 않음.
  * "등급 표시가 의미 있는 선택지" 라는 시각 신호로 일관 사용.
  */
 
@@ -18,10 +19,10 @@ export interface GradeStyle {
   readonly bracketClose: string;
 }
 
-const STYLE_COMMON: GradeStyle    = { color: '#bcbcbc', bracketOpen: '《', bracketClose: '》' };
-const STYLE_RARE: GradeStyle      = { color: '#39c5bb', bracketOpen: '《', bracketClose: '》' };
-const STYLE_LEGENDARY: GradeStyle = { color: '#ff5577', bracketOpen: '《', bracketClose: '》' };
-const STYLE_FALLBACK: GradeStyle  = { color: 'white',   bracketOpen: '《', bracketClose: '》' };
+const STYLE_COMMON: GradeStyle    = { color: '#bcbcbc', bracketOpen: '❮', bracketClose: '❯' };
+const STYLE_RARE: GradeStyle      = { color: '#39c5bb', bracketOpen: '❮', bracketClose: '❯' };
+const STYLE_LEGENDARY: GradeStyle = { color: '#ff5577', bracketOpen: '❮', bracketClose: '❯' };
+const STYLE_FALLBACK: GradeStyle  = { color: 'white',   bracketOpen: '❮', bracketClose: '❯' };
 
 export function gradeStyle(grade: string | undefined): GradeStyle {
   switch (grade) {
