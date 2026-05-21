@@ -14,7 +14,8 @@
     "build:data": "tsx scripts/build-data.ts",
     "dev": "tsx src/cli.tsx",
     "start": "node dist/cli.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "dump": "tsx src/scripts/dump.ts"
   },
   "files": [
     "dist",
