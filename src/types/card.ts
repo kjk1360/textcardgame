@@ -14,7 +14,11 @@ export type Cost =
   | { kind: 'x' }
   | { kind: 'unplayable' };
 
-export type Rarity = 'starter' | 'common' | 'uncommon' | 'rare' | 'special';
+/**
+ * 카드 등급 — 보상/풀 가중치·가격 등에 사용. 'starter'(시작 덱)는 등급이 아니라
+ * 카드 풀(`POOL_START_CARDS`)로 분류되므로 여기엔 없음.
+ */
+export type Rarity = 'common' | 'rare' | 'legendary';
 
 export type CardKeyword =
   | 'exhaust'

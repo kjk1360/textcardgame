@@ -282,10 +282,8 @@ function CardInstanceDetail({ card }: { card: CardInstance }): React.ReactElemen
 
 function gradeLabel(grade: SkillGrade): string {
   switch (grade) {
-    case 'lowest':  return '최하급';
-    case 'low':     return '하급';
-    case 'mid':     return '중급';
-    case 'high':    return '상급';
-    case 'highest': return '최상급';
+    case 'common':    return '커먼';
+    case 'rare':      return '레어';
+    case 'legendary': return '레전더리';
   }
 }

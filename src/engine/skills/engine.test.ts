@@ -25,7 +25,7 @@ function makeSkill(opts: {
     id: id<SkillId>(opts.id),
     name: opts.id,
     description: '',
-    grade: opts.grade ?? 'low',
+    grade: opts.grade ?? 'common',
     tags: [],
     passiveEligible: opts.passiveEligible ?? true,
     hooks: (opts.hooks ?? []).map(h => ({

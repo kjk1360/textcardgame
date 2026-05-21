@@ -122,11 +122,9 @@ function SkillDetail({ sid, isPassive }: { sid: SkillId; isPassive: boolean }): 
 
 function gradeColor(grade: string): string {
   switch (grade) {
-    case 'lowest':  return 'gray';
-    case 'low':     return 'white';
-    case 'mid':     return 'yellow';
-    case 'high':    return 'magenta';
-    case 'highest': return 'red';
-    default:        return 'white';
+    case 'common':    return 'white';
+    case 'rare':      return 'yellow';
+    case 'legendary': return 'magenta';
+    default:          return 'white';
   }
 }

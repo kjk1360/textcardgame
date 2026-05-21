@@ -34,7 +34,7 @@ export const POOL_SINGLE_DEFENSE_ID = id<ModifierPoolId>('pool_single_defense');
 export const CARD_STRIKE: CardDefinition = {
   id: id<CardDefId>('strike'), name: '타격',
   cost: { kind: 'fixed', value: 1 }, type: 'attack', target: { kind: 'enemy' },
-  rarity: 'starter', tags: [TAG_PHYSICAL, TAG_SINGLE_ATTACK], keywords: [],
+  rarity: 'common', tags: [TAG_PHYSICAL, TAG_SINGLE_ATTACK], keywords: [],
   baseDescription: '적에게 6의 피해를 줍니다.',
   baseEffects: [{ kind: 'damage', amount: 6, target: 'enemy' }],
   modifierPoolRefs: [POOL_PHYSICAL_ID, POOL_SINGLE_ATTACK_ID],
@@ -43,7 +43,7 @@ export const CARD_STRIKE: CardDefinition = {
 export const CARD_DEFEND: CardDefinition = {
   id: id<CardDefId>('defend'), name: '수비',
   cost: { kind: 'fixed', value: 1 }, type: 'skill', target: { kind: 'self' },
-  rarity: 'starter', tags: [TAG_SINGLE_DEFENSE], keywords: [],
+  rarity: 'common', tags: [TAG_SINGLE_DEFENSE], keywords: [],
   baseDescription: '방어도 5를 얻습니다.',
   baseEffects: [{ kind: 'gainBlock', amount: 5 }],
   modifierPoolRefs: [POOL_SINGLE_DEFENSE_ID],

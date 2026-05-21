@@ -63,13 +63,14 @@ function makeCardInstance(defId: string, modCount: number = 0): CardInstance {
   };
 }
 
+// 3-grade rarity table (common / rare / legendary). Base sell prices
+// per `engine/meta/economy.ts`: 10 / 40 / 100.
 const cardRegistry = {
   defs: new Map<CardDefId, CardDefinition>([
-    [id<CardDefId>('strike'),       makeCardDef('strike', 'starter')],
+    [id<CardDefId>('strike'),       makeCardDef('strike', 'common')],
     [id<CardDefId>('common-1'),     makeCardDef('common-1', 'common')],
-    [id<CardDefId>('uncommon-1'),   makeCardDef('uncommon-1', 'uncommon')],
     [id<CardDefId>('rare-1'),       makeCardDef('rare-1', 'rare')],
-    [id<CardDefId>('special-1'),    makeCardDef('special-1', 'special')],
+    [id<CardDefId>('legendary-1'),  makeCardDef('legendary-1', 'legendary')],
   ]),
   get(cid: CardDefId) {
     const c = this.defs.get(cid);
@@ -95,11 +96,9 @@ function makeMeta(opts: { gold?: number; capacity?: number; cards?: CardInstance
 describe('economy: cardSellPrice', () => {
   it('rarity base values', () => {
     const cases: Array<[string, number]> = [
-      ['strike', 5],     // starter
-      ['common-1', 10],
-      ['uncommon-1', 25],
-      ['rare-1', 60],
-      ['special-1', 100],
+      ['common-1',    10],
+      ['rare-1',      40],
+      ['legendary-1', 100],
     ];
     for (const [defId, expected] of cases) {
       const card = makeCardInstance(defId);
@@ -108,10 +107,10 @@ describe('economy: cardSellPrice', () => {
   });
 
   it('per-modifier bonus stacks (+8 each)', () => {
-    const c1 = makeCardInstance('uncommon-1', 1);
-    expect(cardSellPrice(c1, cardRegistry.get(id<CardDefId>('uncommon-1')))).toBe(25 + 8);
-    const c3 = makeCardInstance('uncommon-1', 3);
-    expect(cardSellPrice(c3, cardRegistry.get(id<CardDefId>('uncommon-1')))).toBe(25 + 24);
+    const c1 = makeCardInstance('rare-1', 1);
+    expect(cardSellPrice(c1, cardRegistry.get(id<CardDefId>('rare-1')))).toBe(40 + 8);
+    const c3 = makeCardInstance('rare-1', 3);
+    expect(cardSellPrice(c3, cardRegistry.get(id<CardDefId>('rare-1')))).toBe(40 + 24);
   });
 });
 
@@ -182,12 +181,12 @@ describe('inventory: add / take / hasCapacity', () => {
 
 describe('inventory: sell', () => {
   it('sellCardFromInventory removes and credits gold', () => {
-    const card = makeCardInstance('uncommon-1', 1);
+    const card = makeCardInstance('rare-1', 1);
     const meta = makeMeta({ gold: 0, cards: [card] });
     const r = sellCardFromInventory(meta, card.instanceId, cardRegistry);
     expect(r).not.toBeNull();
-    expect(r!.goldGained).toBe(25 + 8);
-    expect(meta.gold).toBe(33);
+    expect(r!.goldGained).toBe(40 + 8);
+    expect(meta.gold).toBe(48);
     expect(meta.inventory.cards).toHaveLength(0);
   });
 
@@ -200,15 +199,15 @@ describe('inventory: sell', () => {
 
   it('bulkSellCards processes bundle, credits sum', () => {
     const bundle = [
-      makeCardInstance('strike', 0),         // 5
-      makeCardInstance('common-1', 2),        // 10 + 16
-      makeCardInstance('rare-1', 1),          // 60 + 8
+      makeCardInstance('strike', 0),       // common 10 + 0 = 10
+      makeCardInstance('common-1', 2),     // common 10 + 16 = 26
+      makeCardInstance('rare-1', 1),       // rare 40 + 8 = 48
     ];
     const meta = makeMeta({ gold: 0 });
     const r = bulkSellCards(meta, bundle, cardRegistry);
     expect(r.sold).toHaveLength(3);
-    expect(r.totalGold).toBe(5 + 26 + 68);
-    expect(meta.gold).toBe(99);
+    expect(r.totalGold).toBe(10 + 26 + 48);
+    expect(meta.gold).toBe(84);
     // bundle isn't in inventory, so inventory unchanged
     expect(meta.inventory.cards).toHaveLength(0);
   });
@@ -254,29 +253,23 @@ describe('inventory: upgradeInventoryCapacity', () => {
 // ====================================================================
 
 describe('skill box', () => {
+  // 3-grade ladder; same prices as the (former) 5-grade test, just
+  // mapped down to the new grades.
   const boxes: SkillBoxDefinition[] = [
     {
-      grade: 'lowest', priceGold: 50,
+      grade: 'common', priceGold: 50,
       entries: [
-        { skillId: id<SkillId>('s_l1'), weight: 1 },
-        { skillId: id<SkillId>('s_l2'), weight: 1 },
+        { skillId: id<SkillId>('s_c1'), weight: 1 },
+        { skillId: id<SkillId>('s_c2'), weight: 1 },
       ],
     },
     {
-      grade: 'low', priceGold: 150,
-      entries: [{ skillId: id<SkillId>('s_low'), weight: 1 }],
+      grade: 'rare', priceGold: 400,
+      entries: [{ skillId: id<SkillId>('s_rare'), weight: 1 }],
     },
     {
-      grade: 'mid', priceGold: 400,
-      entries: [{ skillId: id<SkillId>('s_mid'), weight: 1 }],
-    },
-    {
-      grade: 'high', priceGold: 1000,
-      entries: [{ skillId: id<SkillId>('s_high'), weight: 1 }],
-    },
-    {
-      grade: 'highest', priceGold: 2500,
-      entries: [{ skillId: id<SkillId>('s_highest'), weight: 1 }],
+      grade: 'legendary', priceGold: 1000,
+      entries: [{ skillId: id<SkillId>('s_legendary'), weight: 1 }],
     },
   ];
   const registry = makeSkillBoxRegistry(boxes);
@@ -289,24 +282,24 @@ describe('skill box', () => {
   it('affordableGrades — includes everything affordable', () => {
     const meta = makeMeta({ gold: 500 });
     const a = affordableGrades(meta, registry).sort();
-    expect(a).toEqual(['low', 'lowest', 'mid'].sort());
+    expect(a).toEqual(['common', 'rare'].sort());
   });
 
   it('cheapestAffordableGrade picks the cheapest', () => {
     expect(cheapestAffordableGrade(makeMeta({ gold: 10 }), registry)).toBeNull();
-    expect(cheapestAffordableGrade(makeMeta({ gold: 100 }), registry)).toBe('lowest');
-    expect(cheapestAffordableGrade(makeMeta({ gold: 999999 }), registry)).toBe('lowest');
+    expect(cheapestAffordableGrade(makeMeta({ gold: 100 }), registry)).toBe('common');
+    expect(cheapestAffordableGrade(makeMeta({ gold: 999999 }), registry)).toBe('common');
   });
 
   it('purchaseSkillBox: success → returns skill + deducts gold', () => {
     const meta = makeMeta({ gold: 500 });
-    const r = purchaseSkillBox(meta, 'low', registry, makeRng('p'));
+    const r = purchaseSkillBox(meta, 'rare', registry, makeRng('p'));
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(r.skillId).toBe('s_low');
-      expect(r.goldSpent).toBe(150);
+      expect(r.skillId).toBe('s_rare');
+      expect(r.goldSpent).toBe(400);
     }
-    expect(meta.gold).toBe(350);
+    expect(meta.gold).toBe(100);
   });
 
   it('purchaseSkillBox: unknown grade', () => {
@@ -318,7 +311,7 @@ describe('skill box', () => {
 
   it('purchaseSkillBox: insufficient gold', () => {
     const meta = makeMeta({ gold: 30 });
-    const r = purchaseSkillBox(meta, 'lowest', registry, makeRng('i'));
+    const r = purchaseSkillBox(meta, 'common', registry, makeRng('i'));
     expect(r.ok).toBe(false);
     if (!r.ok && 'needed' in r) {
       expect(r.reason).toBe('insufficient-gold');
@@ -329,9 +322,9 @@ describe('skill box', () => {
   });
 
   it('purchaseSkillBox: empty pool', () => {
-    const empty = makeSkillBoxRegistry([{ grade: 'lowest', priceGold: 10, entries: [] }]);
+    const empty = makeSkillBoxRegistry([{ grade: 'common', priceGold: 10, entries: [] }]);
     const meta = makeMeta({ gold: 100 });
-    const r = purchaseSkillBox(meta, 'lowest', empty, makeRng('e'));
+    const r = purchaseSkillBox(meta, 'common', empty, makeRng('e'));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe('empty-pool');
     expect(meta.gold).toBe(100); // no deduction
@@ -340,19 +333,19 @@ describe('skill box', () => {
   it('purchaseSkillBox: weighted distribution over many trials', () => {
     const weighted = makeSkillBoxRegistry([
       {
-        grade: 'lowest', priceGold: 0,
+        grade: 'common', priceGold: 0,
         entries: [
-          { skillId: id<SkillId>('common'), weight: 10 },
-          { skillId: id<SkillId>('rare'),   weight: 1 },
+          { skillId: id<SkillId>('common_skill'), weight: 10 },
+          { skillId: id<SkillId>('rare_skill'),   weight: 1 },
         ],
       },
     ]);
     let common = 0, rare = 0;
     for (let i = 0; i < 200; i++) {
       const meta = makeMeta({ gold: 100 });
-      const r = purchaseSkillBox(meta, 'lowest', weighted, makeRng(`t-${i}`));
+      const r = purchaseSkillBox(meta, 'common', weighted, makeRng(`t-${i}`));
       if (r.ok) {
-        if (r.skillId === 'common') common++;
+        if (r.skillId === 'common_skill') common++;
         else rare++;
       }
     }
@@ -369,29 +362,29 @@ describe('integration: rest hub workflow', () => {
   it('return from dungeon → sell undeposited → buy upgrade → buy skill', () => {
     const meta = makeMeta({ gold: 0, capacity: 20 });
     const undeposited = [
-      makeCardInstance('common-1', 0),  // 10
-      makeCardInstance('common-1', 1),  // 18
-      makeCardInstance('uncommon-1', 2), // 41
-      makeCardInstance('rare-1', 0),     // 60
-      makeCardInstance('rare-1', 1),     // 68
+      makeCardInstance('common-1', 0),    // common 10
+      makeCardInstance('common-1', 1),    // common 10 + 8 = 18
+      makeCardInstance('rare-1', 2),      // rare 40 + 16 = 56
+      makeCardInstance('legendary-1', 0), // legendary 100
+      makeCardInstance('legendary-1', 1), // legendary 100 + 8 = 108
     ];
     // Decision: keep nothing, sell all
     bulkSellCards(meta, undeposited, cardRegistry);
-    expect(meta.gold).toBe(10 + 18 + 41 + 60 + 68);
+    expect(meta.gold).toBe(10 + 18 + 56 + 100 + 108);
 
     // Upgrade capacity
     const up = upgradeInventoryCapacity(meta);
     expect(up.ok).toBe(true);
     expect(meta.inventory.capacity).toBe(25);
 
-    // Buy lowest skill box
+    // Buy common skill box
     const boxes = makeSkillBoxRegistry([
-      { grade: 'lowest', priceGold: 50, entries: [{ skillId: id<SkillId>('starter_skill'), weight: 1 }] },
+      { grade: 'common', priceGold: 50, entries: [{ skillId: id<SkillId>('starter_skill'), weight: 1 }] },
     ]);
-    const buy = purchaseSkillBox(meta, 'lowest', boxes, makeRng('buy'));
+    const buy = purchaseSkillBox(meta, 'common', boxes, makeRng('buy'));
     expect(buy.ok).toBe(true);
     if (buy.ok) expect(buy.skillId).toBe('starter_skill');
-    // 197 - 100 (upgrade) - 50 (skill) = 47
-    expect(meta.gold).toBe(47);
+    // 292 - 100 (upgrade) - 50 (skill) = 142
+    expect(meta.gold).toBe(142);
   });
 });

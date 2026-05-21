@@ -16,7 +16,10 @@ import type { EffectTag, SkillId } from './ids.js';
  * difference is purely persistence-time.
  */
 
-export type SkillGrade = 'lowest' | 'low' | 'mid' | 'high' | 'highest';
+/**
+ * 스킬 등급 — 카드와 동일한 3단계.
+ */
+export type SkillGrade = 'common' | 'rare' | 'legendary';
 
 /** Game events that skill hooks can listen to. Superset of status events. */
 export type GameEventName =

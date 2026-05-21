@@ -16,11 +16,9 @@ import type { CardDefinition, CardInstance, Rarity } from '../../types/index.js'
 // ====================================================================
 
 const RARITY_BASE: Record<Rarity, number> = {
-  starter:   5,
   common:    10,
-  uncommon:  25,
-  rare:      60,
-  special:   100,
+  rare:      40,
+  legendary: 100,
 };
 
 /** Per-modifier bonus added to base price. */

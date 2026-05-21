@@ -290,7 +290,7 @@ export class FlowHostImpl implements FlowHost {
 // ====================================================================
 
 const RARITY_ORDER: Record<string, number> = {
-  starter: 0, common: 1, uncommon: 2, rare: 3, special: 4,
+  common: 0, rare: 1, legendary: 2,
 };
 function rarityRank(r: string): number {
   return RARITY_ORDER[r] ?? 0;

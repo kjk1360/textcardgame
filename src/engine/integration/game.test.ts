@@ -61,7 +61,7 @@ const strike: CardDefinition = {
   name: '타격',
   cost: { kind: 'fixed', value: 1 },
   type: 'attack', target: { kind: 'enemy' },
-  rarity: 'starter', tags: [], keywords: [],
+  rarity: 'common', tags: [], keywords: [],
   baseDescription: 'Deal 6 damage',
   baseEffects: [{ kind: 'damage', amount: 6, target: 'enemy' }],
   modifierPoolRefs: [id<ModifierPoolId>('pool_attack')],
@@ -83,7 +83,7 @@ const defend: CardDefinition = {
   name: '수비',
   cost: { kind: 'fixed', value: 1 },
   type: 'skill', target: { kind: 'self' },
-  rarity: 'starter', tags: [], keywords: [],
+  rarity: 'common', tags: [], keywords: [],
   baseDescription: 'Gain 5 block',
   baseEffects: [{ kind: 'gainBlock', amount: 5 }],
   modifierPoolRefs: [],
@@ -120,7 +120,7 @@ const skillLifesteal: SkillDefinition = {
   id: id<SkillId>('skill_lifesteal'),
   name: '흡혈',
   description: 'Heal on enemy kill',
-  grade: 'low',
+  grade: 'common',
   tags: [],
   passiveEligible: true,
   hooks: [{ on: 'onEnemyKilled', effects: [{ kind: 'gainHp', amount: 3 }] }],
@@ -128,7 +128,7 @@ const skillLifesteal: SkillDefinition = {
 
 // --- Skill box ---
 const lowestBox: SkillBoxDefinition = {
-  grade: 'lowest',
+  grade: 'common',
   priceGold: 0, // free for test convenience
   entries: [{ skillId: skillLifesteal.id, weight: 1 }],
 };

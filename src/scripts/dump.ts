@@ -167,7 +167,8 @@ function dumpStatuses(): void {
 function dumpEnemies(): void {
   out(`\n=== Enemies (${ALL_ENEMIES.length}) ===`);
   for (const e of ALL_ENEMIES) {
-    out(`  ${pad(e.id, 12)} ${pad(e.name, 8)} tier=${e.tier} hp=${e.hpRange[0]}-${e.hpRange[1]} gold=${e.rewards.goldRange[0]}-${e.rewards.goldRange[1]}`);
+    const gold = e.rewards ? `${e.rewards.goldRange[0]}-${e.rewards.goldRange[1]}` : '?';
+    out(`  ${pad(e.id, 12)} ${pad(e.name, 8)} tier=${e.tier} hp=${e.hpRange[0]}-${e.hpRange[1]} gold=${gold}`);
   }
   out(`\n--- Enemy groups (${ALL_ENEMY_GROUPS.length}) ---`);
   for (const g of ALL_ENEMY_GROUPS) {

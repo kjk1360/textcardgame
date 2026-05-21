@@ -4,6 +4,7 @@ import type { Effect } from './effect.js';
 import type { ConditionExpr } from './condition.js';
 import type { ModifierId, ModifierPoolId } from './ids.js';
 import type { SkillId, ScenarioId, EventId, NodeTypeId, EnemyGroupId } from './ids.js';
+import type { SkillGrade } from './skill.js';
 
 /**
  * Flow definition — the event scenario graph.
@@ -124,7 +125,7 @@ export interface CardOfferStep {
 
 export interface SkillOfferStep {
   readonly kind: 'skillOffer';
-  readonly grade?: 'lowest' | 'low' | 'mid' | 'high' | 'highest';
+  readonly grade?: SkillGrade;
   readonly poolOverride?: ReadonlyArray<SkillId>;
   readonly count: number;
   readonly allowSkip?: boolean;

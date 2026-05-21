@@ -1,4 +1,4 @@
-import type { SkillId } from '../../types/index.js';
+import type { SkillId, SkillGrade } from '../../types/index.js';
 import type { IRandom } from '../rng.js';
 import type { MetaState } from './inventory.js';
 
@@ -8,11 +8,10 @@ import type { MetaState } from './inventory.js';
  *
  * Doc: 06_meta_progression.md §"스킬 박스 (Skill Box)"
  *
- * Grades are ordered from cheapest to most expensive, with each grade
- * pulling from its own pool of skills.
+ * Grades are 'common' | 'rare' | 'legendary' (defined in types/skill.ts).
  */
 
-export type SkillGrade = 'lowest' | 'low' | 'mid' | 'high' | 'highest';
+export type { SkillGrade };
 
 export interface SkillBoxDefinition {
   readonly grade: SkillGrade;

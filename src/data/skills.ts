@@ -16,14 +16,14 @@ const id = <T extends string>(s: string): T => s as T;
 export const SKILL_LIFESTEAL: SkillDefinition = {
   id: id<SkillId>('skill_lifesteal'),
   name: '흡혈', description: '적 처치 시 3 HP 회복.',
-  grade: 'low', tags: [], passiveEligible: true,
+  grade: 'common', tags: [], passiveEligible: true,
   hooks: [{ on: 'onEnemyKilled', effects: [{ kind: 'gainHp', amount: 3 }] }],
 };
 
 export const SKILL_QUICK_HANDS: SkillDefinition = {
   id: id<SkillId>('skill_quick_hands'),
   name: '빠른 손', description: '매 턴 시작 +1 드로우.',
-  grade: 'low', tags: [], passiveEligible: true,
+  grade: 'common', tags: [], passiveEligible: true,
   hooks: [{ on: 'onTurnStart', effects: [{ kind: 'draw', count: 1 }] }],
 };
 
@@ -32,7 +32,7 @@ export const SKILL_QUICK_HANDS: SkillDefinition = {
 export const SKILL_STRENGTH_1: SkillDefinition = {
   id: id<SkillId>('skill_strength_1'),
   name: '힘증가', description: '전투 시작 시 근력 +1 부여 (해당 전투 한정).',
-  grade: 'low', tags: [], passiveEligible: true,
+  grade: 'common', tags: [], passiveEligible: true,
   hooks: [{
     on: 'onCombatStart',
     effects: [{ kind: 'applyStatus', status: STATUS_STRENGTH.id, stacks: 1, target: 'self' }],
@@ -42,7 +42,7 @@ export const SKILL_STRENGTH_1: SkillDefinition = {
 export const SKILL_STRENGTH_2: SkillDefinition = {
   id: id<SkillId>('skill_strength_2'),
   name: '괴력', description: '전투 시작 시 근력 +2 부여 (해당 전투 한정).',
-  grade: 'mid', tags: [], passiveEligible: true,
+  grade: 'rare', tags: [], passiveEligible: true,
   hooks: [{
     on: 'onCombatStart',
     effects: [{ kind: 'applyStatus', status: STATUS_STRENGTH.id, stacks: 2, target: 'self' }],
@@ -52,7 +52,7 @@ export const SKILL_STRENGTH_2: SkillDefinition = {
 export const SKILL_STRENGTH_3: SkillDefinition = {
   id: id<SkillId>('skill_strength_3'),
   name: '천부의 힘', description: '전투 시작 시 근력 +3 부여 (해당 전투 한정).',
-  grade: 'high', tags: [], passiveEligible: true,
+  grade: 'legendary', tags: [], passiveEligible: true,
   hooks: [{
     on: 'onCombatStart',
     effects: [{ kind: 'applyStatus', status: STATUS_STRENGTH.id, stacks: 3, target: 'self' }],
@@ -63,7 +63,7 @@ export const SKILL_SACRIFICE: SkillDefinition = {
   id: id<SkillId>('skill_sacrifice'),
   name: '희생 분신',
   description: '매 턴 드로우 -1. 카드 사용 시 효과가 2번 발동됨.',
-  grade: 'high', tags: [], passiveEligible: true,
+  grade: 'legendary', tags: [], passiveEligible: true,
   // Mechanical effects are wired in game.ts (combatEndTurn draw modifier
   // + combatPlayCard duplicate trigger) — hooks here are informational.
   hooks: [],
@@ -78,15 +78,15 @@ export const ALL_SKILLS: ReadonlyArray<SkillDefinition> = [
 // Skill boxes — meta-shop bags of skills purchased between runs.
 // --------------------------------------------------------------------
 
-export const SKILL_BOX_LOWEST: SkillBoxDefinition = {
-  grade: 'lowest', priceGold: 50,
+export const SKILL_BOX_COMMON: SkillBoxDefinition = {
+  grade: 'common', priceGold: 50,
   entries: [
     { skillId: SKILL_LIFESTEAL.id, weight: 1 },
     { skillId: SKILL_QUICK_HANDS.id, weight: 1 },
   ],
 };
 
-export const ALL_SKILL_BOXES: ReadonlyArray<SkillBoxDefinition> = [SKILL_BOX_LOWEST];
+export const ALL_SKILL_BOXES: ReadonlyArray<SkillBoxDefinition> = [SKILL_BOX_COMMON];
 
 /**
  * Treasure / skill-book pool — listed inline in FLOW_TREASURE's
