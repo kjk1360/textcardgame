@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import { useGame } from '../EngineContext.js';
+import { gradeColor, wrapWithGradeBrackets } from '../helpers/grade-style.js';
 
 /**
  * SkillStrip — always-visible compact strip of the player's currently
@@ -26,14 +27,18 @@ export function SkillStrip(): React.ReactElement | null {
         if (!game.registries.skills.has(sid)) return null;
         const def = game.registries.skills.get(sid);
         return (
-          <Text key={sid} color={gradeColor(def.grade)}>· {def.name}</Text>
+          <Text key={sid} color={gradeColor(def.grade)}>
+            · {wrapWithGradeBrackets(def.name, def.grade)}
+          </Text>
         );
       })}
       {passives.map(sid => {
         if (!game.registries.skills.has(sid)) return null;
         const def = game.registries.skills.get(sid);
         return (
-          <Text key={`p-${sid}`} color="cyan">★ {def.name} (영구)</Text>
+          <Text key={`p-${sid}`} color={gradeColor(def.grade)}>
+            ★ {wrapWithGradeBrackets(def.name, def.grade)} (영구)
+          </Text>
         );
       })}
     </Box>
@@ -53,11 +58,3 @@ export function RightPanelWithSkills({ children }: { children: React.ReactNode }
   );
 }
 
-function gradeColor(grade: string): string {
-  switch (grade) {
-    case 'common':    return 'white';
-    case 'rare':      return 'yellow';
-    case 'legendary': return 'magenta';
-    default:          return 'white';
-  }
-}

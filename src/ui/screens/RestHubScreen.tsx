@@ -8,6 +8,7 @@ import { nextCapacityUpgrade, cardSellPrice } from '../../engine/meta/economy.js
 import { upgradeInventoryCapacity } from '../../engine/meta/inventory.js';
 import type { CardInstance } from '../../types/index.js';
 import { RightPanelWithSkills } from '../layout/SkillStrip.js';
+import { gradeColor, wrapWithGradeBrackets } from '../helpers/grade-style.js';
 
 /**
  * Rest Hub — non-paged menu, repeatable until 출발 chosen.
@@ -146,14 +147,16 @@ function PendingDeckView({ onBack }: { onBack: () => void }): React.ReactElement
     const invFull = game.state.global.inventory.cards.length >= game.state.global.inventory.capacity;
     items.push({
       id: `store-${card.instanceId}`,
-      label: `[보관] ${def.name} ${stars}`,
+      label: `[보관] ${wrapWithGradeBrackets(def.name, def.rarity)} ${stars}`,
+      color: gradeColor(def.rarity),
       value: { kind: 'store', card },
       disabled: invFull,
       disabledReason: invFull ? '인벤 가득 참' : undefined,
     });
     items.push({
       id: `sell-${card.instanceId}`,
-      label: `[판매] ${def.name} ${stars}  → ${price}G`,
+      label: `[판매] ${wrapWithGradeBrackets(def.name, def.rarity)} ${stars}  → ${price}G`,
+      color: gradeColor(def.rarity),
       value: { kind: 'sell', card },
     });
   }
@@ -210,7 +213,8 @@ function InventoryView({ onBack }: { onBack: () => void }): React.ReactElement {
     const stars = card.modifiers.length > 0 ? `+${card.modifiers.length}` : '';
     items.push({
       id: `sell-${card.instanceId}`,
-      label: `[판매] ${def.name} ${stars}  → ${price}G`,
+      label: `[판매] ${wrapWithGradeBrackets(def.name, def.rarity)} ${stars}  → ${price}G`,
+      color: gradeColor(def.rarity),
       value: { kind: 'sell', card },
     });
   }
@@ -257,9 +261,11 @@ function CardInstanceDetail({ card }: { card: CardInstance }): React.ReactElemen
   const resolved = resolveCardEffects(def, card, game.registries.modifiers);
   return (
     <Box flexDirection="column">
-      <Text bold color="cyan">{def.name}</Text>
+      <Text bold color={gradeColor(def.rarity)}>
+        {wrapWithGradeBrackets(def.name, def.rarity)}
+      </Text>
       <Text>비용: {resolved.cost.kind === 'fixed' ? resolved.cost.value : resolved.cost.kind}</Text>
-      <Text>희귀도: {def.rarity}</Text>
+      <Text>등급: {def.rarity}</Text>
       <Box marginTop={1}><Text>{def.baseDescription}</Text></Box>
       {card.modifiers.length > 0 && (
         <Box marginTop={1} flexDirection="column">

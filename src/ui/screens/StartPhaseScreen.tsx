@@ -7,6 +7,7 @@ import { affordableGrades, purchaseSkillBox, type SkillGrade } from '../../engin
 import { resolveCardEffects } from '../../engine/modifiers/resolver.js';
 import { DEFAULT_DRAFT_CAPACITY } from '../../engine/integration/game.js';
 import type { CardInstance } from '../../types/index.js';
+import { gradeColor, wrapWithGradeBrackets } from '../helpers/grade-style.js';
 
 /**
  * Start Phase — two stages:
@@ -81,7 +82,8 @@ function SkillStage({ onAdvance }: { onAdvance: () => void }): React.ReactElemen
         const can = affordable.includes(b.grade);
         return {
           id: `box-${b.grade}`,
-          label: `${gradeLabel(b.grade)} 상자 구매 (${b.priceGold}G)`,
+          label: `${wrapWithGradeBrackets(`${gradeLabel(b.grade)} 상자`, b.grade)} 구매 (${b.priceGold}G)`,
+          color: gradeColor(b.grade),
           value: { kind: 'box', grade: b.grade },
           disabled: !can,
           disabledReason: !can ? `${b.priceGold}G 필요, 보유 ${game.state.global.gold}G` : undefined,
@@ -177,7 +179,8 @@ function DraftStage({ onDepart }: { onDepart: () => void }): React.ReactElement 
     const stars = card.modifiers.length > 0 ? `+${card.modifiers.length}` : '';
     items.push({
       id: `inv-${card.instanceId}`,
-      label: `[가져가기]   ${def.name} ${stars}`,
+      label: `[가져가기]   ${wrapWithGradeBrackets(def.name, def.rarity)} ${stars}`,
+      color: gradeColor(def.rarity),
       value: { kind: 'withdraw', card },
       disabled: draftFull,
       disabledReason: draftFull ? `출발 덱 가득 (${drafted.length}/${cap})` : undefined,
@@ -190,7 +193,8 @@ function DraftStage({ onDepart }: { onDepart: () => void }): React.ReactElement 
     const stars = card.modifiers.length > 0 ? `+${card.modifiers.length}` : '';
     items.push({
       id: `dft-${card.instanceId}`,
-      label: `[되돌리기]   ${def.name} ${stars}  ★ 출발 덱에 있음`,
+      label: `[되돌리기]   ${wrapWithGradeBrackets(def.name, def.rarity)} ${stars}  ★ 출발 덱에 있음`,
+      color: gradeColor(def.rarity),
       value: { kind: 'return', card },
     });
   }
@@ -264,9 +268,11 @@ function CardInstanceDetail({ card }: { card: CardInstance }): React.ReactElemen
   const resolved = resolveCardEffects(def, card, game.registries.modifiers);
   return (
     <Box flexDirection="column">
-      <Text bold color="cyan">{def.name}</Text>
+      <Text bold color={gradeColor(def.rarity)}>
+        {wrapWithGradeBrackets(def.name, def.rarity)}
+      </Text>
       <Text>비용: {resolved.cost.kind === 'fixed' ? resolved.cost.value : resolved.cost.kind}</Text>
-      <Text>타입: {def.type}</Text>
+      <Text>타입: {def.type}  등급: {def.rarity}</Text>
       <Box marginTop={1}><Text>{def.baseDescription}</Text></Box>
       {card.modifiers.length > 0 && (
         <Box marginTop={1} flexDirection="column">

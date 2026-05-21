@@ -27,6 +27,13 @@ export interface FocusListItem<T = unknown> {
   readonly disabled?: boolean;
   readonly disabledReason?: string;
   readonly value: T;
+  /**
+   * Optional per-item color (Ink color name or hex). Used for graded
+   * items so card/skill rarity is visible at a glance. Ignored when
+   * the row is focused (focus uses the active-yellow highlight) or
+   * disabled (gray).
+   */
+  readonly color?: string;
 }
 
 export interface FocusListProps<T> {
@@ -124,10 +131,16 @@ export function FocusList<T>({
           // 1-based numeric shortcut hint. Only show 1-9; beyond that
           // we hide the digit (jump-select still won't fire for those).
           const numHint = i < 9 ? `${i + 1}. ` : '   ';
+          // Color precedence: disabled gray > focused yellow > item.color > default
+          const color = isDisabled
+            ? 'gray'
+            : isFocused
+              ? 'yellow'
+              : item.color;
           return (
             <Box key={item.id}>
               <Text
-                color={isDisabled ? 'gray' : isFocused ? 'yellow' : undefined}
+                color={color}
                 bold={isFocused && !isDisabled}
               >
                 {isFocused ? cursor : noncursor}

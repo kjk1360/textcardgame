@@ -6,6 +6,7 @@ import { ThreeBoxLayout } from '../layout/ThreeBoxLayout.js';
 import { resolveCardEffects } from '../../engine/modifiers/resolver.js';
 import { isGoldMarker, goldMarkerAmount } from '../../engine/flow/skill-offer-gold.js';
 import { RightPanelWithSkills } from '../layout/SkillStrip.js';
+import { gradeColor, wrapWithGradeBrackets } from '../helpers/grade-style.js';
 import type {
   CardDefId,
   CardInstance,
@@ -124,9 +125,15 @@ function CardPickView({
   const dispatch = useDispatch();
   const [focused, setFocused] = useState<CardDefId | null>(status.choices[0] ?? null);
 
-  const items: FocusListItem<CardDefId>[] = status.choices.map(cid => ({
-    id: cid, label: game.registries.cards.get(cid).name, value: cid,
-  }));
+  const items: FocusListItem<CardDefId>[] = status.choices.map(cid => {
+    const def = game.registries.cards.get(cid);
+    return {
+      id: cid,
+      label: wrapWithGradeBrackets(def.name, def.rarity),
+      color: gradeColor(def.rarity),
+      value: cid,
+    };
+  });
   if (status.canSkip) {
     items.push({ id: '__skip__', label: '— 건너뛰기 —', value: '__skip__' as CardDefId });
   }
@@ -162,7 +169,9 @@ function CardDefDetail({ defId }: { defId: CardDefId }): React.ReactElement {
   const def = game.registries.cards.get(defId);
   return (
     <Box flexDirection="column">
-      <Text bold color="cyan">{def.name}</Text>
+      <Text bold color={gradeColor(def.rarity)}>
+        {wrapWithGradeBrackets(def.name, def.rarity)}
+      </Text>
       <Text>비용: {def.cost.kind === 'fixed' ? def.cost.value : def.cost.kind}</Text>
       <Text>타입: {def.type}</Text>
       <Text>타겟: {def.target.kind}</Text>
@@ -192,7 +201,13 @@ function SkillPickView({
     if (isGoldMarker(sid)) {
       return { id: sid, label: `💰 +${goldMarkerAmount(sid)} 골드`, value: sid };
     }
-    return { id: sid, label: game.registries.skills.get(sid).name, value: sid };
+    const def = game.registries.skills.get(sid);
+    return {
+      id: sid,
+      label: wrapWithGradeBrackets(def.name, def.grade),
+      color: gradeColor(def.grade),
+      value: sid,
+    };
   });
   if (status.canSkip) {
     items.push({ id: '__skip__', label: '— 건너뛰기 —', value: '__skip__' as SkillId });
@@ -222,13 +237,18 @@ function SkillPickView({
       bottom={<Text dimColor>↑↓ 선택  Enter 확정</Text>}
       right={
         <RightPanelWithSkills>
-          {focusedIsSkill ? (
-            <Box flexDirection="column">
-              <Text bold color="cyan">{game.registries.skills.get(focused!).name}</Text>
-              <Text>등급: {game.registries.skills.get(focused!).grade}</Text>
-              <Box marginTop={1}><Text>{game.registries.skills.get(focused!).description}</Text></Box>
-            </Box>
-          ) : focusedIsGold ? (
+          {focusedIsSkill ? (() => {
+            const def = game.registries.skills.get(focused!);
+            return (
+              <Box flexDirection="column">
+                <Text bold color={gradeColor(def.grade)}>
+                  {wrapWithGradeBrackets(def.name, def.grade)}
+                </Text>
+                <Text>등급: {def.grade}</Text>
+                <Box marginTop={1}><Text>{def.description}</Text></Box>
+              </Box>
+            );
+          })() : focusedIsGold ? (
             <Box flexDirection="column">
               <Text bold color="yellow">💰 골드 보상</Text>
               <Box marginTop={1}><Text>{goldMarkerAmount(focused!)} 메타 골드를 얻습니다.</Text></Box>
@@ -264,7 +284,12 @@ function UpgradeTargetView({
   const items: FocusListItem<CardInstance>[] = status.candidates.map(c => {
     const def = game.registries.cards.get(c.defId);
     const stars = c.modifiers.length > 0 ? ` +${c.modifiers.length}` : '';
-    return { id: c.instanceId, label: `${def.name}${stars}`, value: c };
+    return {
+      id: c.instanceId,
+      label: `${wrapWithGradeBrackets(def.name, def.rarity)}${stars}`,
+      color: gradeColor(def.rarity),
+      value: c,
+    };
   });
   if (status.canSkip) {
     items.push({ id: '__skip__', label: '— 건너뛰기 —', value: null as unknown as CardInstance });
@@ -301,9 +326,11 @@ function CardInstanceDetail({ card }: { card: CardInstance }): React.ReactElemen
   const resolved = resolveCardEffects(def, card, game.registries.modifiers);
   return (
     <Box flexDirection="column">
-      <Text bold color="cyan">{def.name}</Text>
+      <Text bold color={gradeColor(def.rarity)}>
+        {wrapWithGradeBrackets(def.name, def.rarity)}
+      </Text>
       <Text>비용: {resolved.cost.kind === 'fixed' ? resolved.cost.value : resolved.cost.kind}</Text>
-      <Text>타입: {def.type}</Text>
+      <Text>타입: {def.type}  등급: {def.rarity}</Text>
       <Box marginTop={1}><Text>{def.baseDescription}</Text></Box>
       {card.modifiers.length > 0 && (
         <Box marginTop={1} flexDirection="column">

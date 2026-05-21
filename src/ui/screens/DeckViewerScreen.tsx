@@ -5,6 +5,7 @@ import { FocusList, type FocusListItem } from '../layout/FocusList.js';
 import { ThreeBoxLayout } from '../layout/ThreeBoxLayout.js';
 import { resolveCardEffects } from '../../engine/modifiers/resolver.js';
 import { formatEffectPreview } from '../helpers/card-preview.js';
+import { gradeColor, wrapWithGradeBrackets } from '../helpers/grade-style.js';
 import type { CardInstance, PlayerActor } from '../../types/index.js';
 
 /**
@@ -48,7 +49,8 @@ export function DeckViewerScreen({ onClose }: { onClose: () => void }): React.Re
     const stars = card.modifiers.length > 0 ? ` +${card.modifiers.length}` : '';
     items.push({
       id: `r-${card.instanceId}`,
-      label: `[런] ${def.name}${stars}`,
+      label: `[런] ${wrapWithGradeBrackets(def.name, def.rarity)}${stars}`,
+      color: gradeColor(def.rarity),
       value: { kind: 'card', card, origin: 'run' },
     });
   }
@@ -57,7 +59,8 @@ export function DeckViewerScreen({ onClose }: { onClose: () => void }): React.Re
     const stars = card.modifiers.length > 0 ? ` +${card.modifiers.length}` : '';
     items.push({
       id: `i-${card.instanceId}`,
-      label: `[인벤] ${def.name}${stars}`,
+      label: `[인벤] ${wrapWithGradeBrackets(def.name, def.rarity)}${stars}`,
+      color: gradeColor(def.rarity),
       value: { kind: 'card', card, origin: 'inv' },
     });
   }
@@ -116,10 +119,12 @@ function CardDetail({
     : [];
   return (
     <Box flexDirection="column">
-      <Text bold color="cyan">{def.name}</Text>
+      <Text bold color={gradeColor(def.rarity)}>
+        {wrapWithGradeBrackets(def.name, def.rarity)}
+      </Text>
       <Text>비용: {resolved.cost.kind === 'fixed' ? resolved.cost.value : resolved.cost.kind}</Text>
       <Text>타입: {def.type}  타겟: {def.target.kind}</Text>
-      <Text>희귀도: {def.rarity}</Text>
+      <Text>등급: {def.rarity}</Text>
       <Box marginTop={1}><Text>{def.baseDescription}</Text></Box>
       {previews.length > 0 && (
         <Box marginTop={1} flexDirection="column">

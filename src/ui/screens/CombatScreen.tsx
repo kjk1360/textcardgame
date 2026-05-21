@@ -7,6 +7,7 @@ import { resolveCardEffects } from '../../engine/modifiers/resolver.js';
 import type { CardInstance, EnemyActor, PlayerActor } from '../../types/index.js';
 import { SkillStrip } from '../layout/SkillStrip.js';
 import { formatEffectPreview } from '../helpers/card-preview.js';
+import { gradeColor, wrapWithGradeBrackets } from '../helpers/grade-style.js';
 
 /**
  * CombatScreen — block-art enemies + animated HP + hand visualization.
@@ -214,7 +215,8 @@ export function CombatScreen(): React.ReactElement {
     const can = game.combatCanPlayCard(c.instanceId, focusedEnemy?.instanceId);
     return {
       id: c.instanceId,
-      label: `${def.name} (${cost})${stars}`,
+      label: `${wrapWithGradeBrackets(def.name, def.rarity)} (${cost})${stars}`,
+      color: gradeColor(def.rarity),
       value: c,
       disabled: !can.ok,
       disabledReason: !can.ok ? (can as { ok: false; reason: string }).reason : undefined,
@@ -625,9 +627,11 @@ function CardInstanceDetail({ card, player }: { card: CardInstance; player: Play
     .filter((s): s is string => s !== null);
   return (
     <Box flexDirection="column">
-      <Text bold color="cyan">{def.name}</Text>
+      <Text bold color={gradeColor(def.rarity)}>
+        {wrapWithGradeBrackets(def.name, def.rarity)}
+      </Text>
       <Text>비용: {resolved.cost.kind === 'fixed' ? resolved.cost.value : resolved.cost.kind}</Text>
-      <Text>타입: {def.type}  타겟: {def.target.kind}</Text>
+      <Text>타입: {def.type}  타겟: {def.target.kind}  등급: {def.rarity}</Text>
       <Box marginTop={1}><Text>{def.baseDescription}</Text></Box>
       {previews.length > 0 && (
         <Box marginTop={1} flexDirection="column">

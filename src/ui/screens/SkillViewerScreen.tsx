@@ -4,6 +4,7 @@ import { useGame } from '../EngineContext.js';
 import { FocusList, type FocusListItem } from '../layout/FocusList.js';
 import { ThreeBoxLayout } from '../layout/ThreeBoxLayout.js';
 import type { SkillId } from '../../types/index.js';
+import { gradeColor, wrapWithGradeBrackets } from '../helpers/grade-style.js';
 
 /**
  * SkillViewerScreen — K shortcut.
@@ -46,17 +47,21 @@ export function SkillViewerScreen({ onClose }: { onClose: () => void }): React.R
   const items: FocusListItem<Row>[] = [];
   for (const sid of characterSkills) {
     if (!game.registries.skills.has(sid)) continue;
+    const def = game.registries.skills.get(sid);
     items.push({
       id: `c-${sid}`,
-      label: `· ${game.registries.skills.get(sid).name}`,
+      label: `· ${wrapWithGradeBrackets(def.name, def.grade)}`,
+      color: gradeColor(def.grade),
       value: { kind: 'skill', sid, isPassive: false },
     });
   }
   for (const sid of passives) {
     if (!game.registries.skills.has(sid)) continue;
+    const def = game.registries.skills.get(sid);
     items.push({
       id: `p-${sid}`,
-      label: `★ ${game.registries.skills.get(sid).name} (영구)`,
+      label: `★ ${wrapWithGradeBrackets(def.name, def.grade)} (영구)`,
+      color: gradeColor(def.grade),
       value: { kind: 'skill', sid, isPassive: true },
     });
   }
@@ -105,7 +110,9 @@ function SkillDetail({ sid, isPassive }: { sid: SkillId; isPassive: boolean }): 
   const def = game.registries.skills.get(sid);
   return (
     <Box flexDirection="column">
-      <Text bold color={isPassive ? 'cyan' : gradeColor(def.grade)}>{def.name}</Text>
+      <Text bold color={gradeColor(def.grade)}>
+        {wrapWithGradeBrackets(def.name, def.grade)}{isPassive ? ' ★' : ''}
+      </Text>
       <Text>등급: {def.grade}{isPassive ? '  (영구)' : ''}</Text>
       <Box marginTop={1}><Text>{def.description}</Text></Box>
       {def.hooks && def.hooks.length > 0 && (
@@ -120,11 +127,3 @@ function SkillDetail({ sid, isPassive }: { sid: SkillId; isPassive: boolean }): 
   );
 }
 
-function gradeColor(grade: string): string {
-  switch (grade) {
-    case 'common':    return 'white';
-    case 'rare':      return 'yellow';
-    case 'legendary': return 'magenta';
-    default:          return 'white';
-  }
-}
