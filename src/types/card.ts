@@ -90,6 +90,12 @@ export interface CardInstance {
   readonly defId: CardDefId;
   modifiers: ModifierInstance[];
   acquired: AcquisitionMeta;
+  /**
+   * 전투 중에만 존재하는 카드 (발견·자기복제·임시 생성). 전투가 끝나면
+   * `collectAllPilesToDeck`에서 걸러져서 다음 전투/덱으로 넘어가지 않는다.
+   * 일반 덱 카드는 false/undefined.
+   */
+  temporary?: boolean;
 }
 
 /**

@@ -200,6 +200,15 @@ export type RunActivity =
         steps: ReadonlyArray<{ enemyInstanceId: string; description: string }>;
         cursor: number;
       };
+      /**
+       * Discover pending state — set by the `discoverFromPool` custom
+       * handler. Pause combat input until UI calls `combatPickDiscover`
+       * to commit (or skip).
+       */
+      pendingDiscover?: {
+        choices: CardDefId[];
+        canSkip: boolean;
+      };
     }
   | {
       kind: 'rewardPick';
@@ -288,7 +297,10 @@ export class Game {
     this.difficultyTable = opts.difficulty ?? makeDefaultDifficultyTable();
     this.rng = makeRng(opts.rngSeed ?? `game-${Date.now()}`);
     this.autoResolveCombat = opts.autoResolveCombat ?? true;
-    this.customHandlers = buildDefaultCustomHandlers(opts.customHandlers);
+    this.customHandlers = buildDefaultCustomHandlers(
+      { cardPools: this.registries.cardPools, rng: this.rng },
+      opts.customHandlers,
+    );
     this.state = createInitialState();
   }
 
@@ -928,6 +940,38 @@ export class Game {
     startPlayerTurn(tfCtx, drawCount);
   }
 
+  // --------------------------------------------------------------------
+  // Discover (전투 중 카드 선택)
+  // --------------------------------------------------------------------
+
+  /**
+   * 발견 (Discover) 선택 처리. `pendingDiscover.choices`에서 cardDefId를
+   * 골라 손에 임시 카드(temporary=true)로 추가. cardDefId === null 이면
+   * 건너뛰기 (canSkip이 true일 때만 의미 있음). pendingDiscover 클리어.
+   *
+   * 핸드 한도(hand.hardLimit) 초과 시 추가 자체가 무시될 수 있음 —
+   * addCardToPile의 정책과 동일.
+   */
+  combatPickDiscover(cardDefId: CardDefId | null): void {
+    const run = this.requireRun();
+    if (run.activity.kind !== 'inCombat') return;
+    const pending = run.activity.pendingDiscover;
+    if (!pending) return;
+    if (cardDefId !== null) {
+      // 안전 검증: 후보에 있는 카드인지
+      if (!pending.choices.includes(cardDefId)) {
+        run.activity.pendingDiscover = undefined;
+        throw new Error(`discover pick ${cardDefId} not in choices`);
+      }
+      const ctx = this.buildExecutionContextForCombat();
+      executeEffects(
+        [{ kind: 'addCardToPile', cardDefId, pile: 'hand' }],
+        ctx,
+      );
+    }
+    run.activity.pendingDiscover = undefined;
+  }
+
   /** Format an enemy's current intent as a short line for the UI. */
   private formatEnemyIntent(enemy: EnemyActor): string {
     const name = this.registries.enemies.has(enemy.defId)
@@ -1343,13 +1387,17 @@ export class Game {
   private collectAllPilesToDeck(deck: CardInstance[], piles: PlayerCombatState): CardInstance[] {
     const result: CardInstance[] = [];
     const seen = new Set<CardInstanceId>();
+    // 전투 종료 시 임시 카드(temporary)는 자동 폐기. 발견/자기복제/단검마술
+    // 같이 전투 중 즉석 생성된 카드들은 다음 전투/덱으로 가져가지 않는다.
     for (const c of [...piles.hand, ...piles.drawPile, ...piles.discardPile, ...piles.exhaustPile]) {
+      if (c.temporary) continue;
       if (seen.has(c.instanceId)) continue;
       seen.add(c.instanceId);
       result.push(c);
     }
     // Also include any deck cards that somehow weren't in piles (defensive)
     for (const c of deck) {
+      if (c.temporary) continue;
       if (!seen.has(c.instanceId)) {
         seen.add(c.instanceId);
         result.push(c);
@@ -1423,6 +1471,7 @@ export class Game {
       // Point at the run's actual gold holder so loseGold/gainGold mutate it.
       run: run,
       customHandlers: this.customHandlers,
+      cards: this.registries.cards,
     };
   }
 
@@ -1439,6 +1488,7 @@ export class Game {
       constants: this.constants,
       run: run,
       customHandlers: this.customHandlers,
+      cards: this.registries.cards,
     };
   }
 

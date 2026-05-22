@@ -185,8 +185,14 @@ export function CombatScreen(): React.ReactElement {
   const enemyTurnDone = enemyTurnActive
     && pendingEnemyTurn!.cursor >= pendingEnemyTurn!.steps.length;
 
+  const pendingDiscover = run.activity.kind === 'inCombat'
+    ? run.activity.pendingDiscover
+    : undefined;
+  const discoverActive = pendingDiscover !== undefined;
+
   useInput((input, key) => {
     if (animating) return;
+    if (discoverActive) return; // FocusList in discover view owns input
     // Enemy turn — Enter advances through queued steps; after the last
     // step a "내 턴 시작" cue lets the player kick off the next turn.
     if (enemyTurnActive) {
@@ -262,6 +268,57 @@ export function CombatScreen(): React.ReactElement {
       fadeProgress={fadeProgress}
     />
   );
+
+  if (discoverActive) {
+    const choices = pendingDiscover!.choices;
+    const items: FocusListItem<CardInstance | null>[] = choices.map((cid, idx) => {
+      const def = game.registries.cards.get(cid);
+      return {
+        id: `disc-${idx}`,
+        label: `${wrapWithGradeBrackets(def.name, def.rarity)}  — ${def.baseDescription}`,
+        color: gradeColor(def.rarity),
+        // Synthesize a dummy CardInstance just for focus/detail rendering.
+        value: {
+          instanceId: `disc-${idx}` as any,
+          defId: cid,
+          modifiers: [],
+          acquired: { kind: 'event' as const, contextId: 'discover' },
+          temporary: true,
+        } satisfies CardInstance,
+      };
+    });
+    if (pendingDiscover!.canSkip) {
+      items.push({ id: '__skip__', label: '— 건너뛰기 —', value: null });
+    }
+    const focusedPreview: CardInstance | null = focusedHand;
+    return (
+      <ThreeBoxLayout
+        title="발견 — 카드 1장 선택"
+        main={mainView}
+        bottom={
+          <Box flexDirection="column">
+            <Text bold color="yellow">발견 카드 (전투 종료 시 사라짐)</Text>
+            <FocusList
+              isActive={!animating}
+              items={items}
+              onFocusChange={it => setFocusedHand(it?.value ?? null)}
+              onSelect={it => {
+                const cardDefId = it.value ? it.value.defId : null;
+                dispatch(() => game.combatPickDiscover(cardDefId));
+                setFocusedHand(null);
+              }}
+            />
+          </Box>
+        }
+        right={
+          <Box flexDirection="column">
+            <SkillStrip />
+            {focusedPreview ? <CardInstanceDetail card={focusedPreview} player={player} /> : null}
+          </Box>
+        }
+      />
+    );
+  }
 
   if (enemyTurnActive) {
     const total = pendingEnemyTurn!.steps.length;

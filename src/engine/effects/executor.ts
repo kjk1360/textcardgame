@@ -1,7 +1,13 @@
+import { randomUUID } from 'node:crypto';
 import type {
   Actor,
+  CardDefId,
+  CardDefinition,
+  CardInstance,
+  CardInstanceId,
   Effect,
   EnemyActor,
+  PileLocation,
   PlayerActor,
   PlayerCombatState,
   StatusId,
@@ -75,6 +81,10 @@ export interface ExecutionContext {
   run: RunMutableState;
   /** Map of registered custom effect handlers by handlerId. */
   customHandlers?: ReadonlyMap<string, CustomEffectHandler>;
+  /** Card definition registry — needed by `addCardToPile` to materialize
+   *  a CardInstance from a CardDefId. Optional so older test fixtures
+   *  that never trigger addCardToPile don't need to supply it. */
+  cards?: { get(id: CardDefId): CardDefinition };
 }
 
 /**
@@ -94,6 +104,7 @@ export type EffectResult =
   | { kind: 'gainGold';    amount: number }
   | { kind: 'loseGold';    amount: number }
   | { kind: 'custom';      handlerId: string }
+  | { kind: 'addCardToPile'; cardDefId: CardDefId; pile: PileLocation; copies: number; instanceIds: CardInstanceId[] }
   | { kind: 'noTarget';    effectKind: Effect['kind'] }   // resolved 0 targets
   | { kind: 'unimplemented'; effectKind: Effect['kind'] }; // not yet in this slice
 
@@ -237,16 +248,59 @@ export function executeEffect(effect: Effect, ctx: ExecutionContext): EffectResu
       return [{ kind: 'custom', handlerId: effect.handlerId }];
     }
 
+    case 'addCardToPile': {
+      // 전투 중 즉석 카드 생성 — 발견·자기복제·임시 단검 같은 메커니즘에
+      // 사용. 생성된 모든 CardInstance는 temporary=true 이어서 전투 종료
+      // 시 collectAllPilesToDeck에서 자동 제거됨.
+      if (!ctx.cards) {
+        // 보조 등록 안 된 컨텍스트 — 안전하게 noop. (테스트 fixture 등)
+        return [{ kind: 'unimplemented', effectKind: 'addCardToPile' }];
+      }
+      const copies = Math.max(1, effect.copies ?? 1);
+      const pile = pileArrayFor(ctx.piles, effect.pile);
+      const handLimit = ctx.constants.hand.hardLimit;
+      const newIds: CardInstanceId[] = [];
+      for (let i = 0; i < copies; i++) {
+        // 손에 추가 시 hand limit 초과는 버림 (드로우와 같은 정책).
+        if (effect.pile === 'hand' && pile.length >= handLimit) break;
+        const inst: CardInstance = {
+          instanceId: randomUUID() as CardInstanceId,
+          defId: effect.cardDefId,
+          modifiers: [],
+          acquired: { kind: 'event', contextId: 'addCardToPile' },
+          temporary: true,
+        };
+        pile.push(inst);
+        newIds.push(inst.instanceId);
+      }
+      return [{
+        kind: 'addCardToPile',
+        cardDefId: effect.cardDefId,
+        pile: effect.pile,
+        copies: newIds.length,
+        instanceIds: newIds,
+      }];
+    }
+
     // ---- Deferred to later slices ----
     case 'discardRandom':
     case 'discardChoose':
     case 'exhaustChoose':
-    case 'addCardToPile':
     case 'upgradeCardInDeck':
     case 'gainCardToInventory':
     case 'gainSkill':
     case 'gainGoldMeta':
       return [{ kind: 'unimplemented', effectKind: effect.kind }];
+  }
+}
+
+/** Map PileLocation to the matching pile array on PlayerCombatState. */
+function pileArrayFor(piles: PlayerCombatState, loc: PileLocation): CardInstance[] {
+  switch (loc) {
+    case 'hand':    return piles.hand;
+    case 'draw':    return piles.drawPile;
+    case 'discard': return piles.discardPile;
+    case 'exhaust': return piles.exhaustPile;
   }
 }
 

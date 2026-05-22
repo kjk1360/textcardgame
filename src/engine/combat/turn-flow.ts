@@ -1,5 +1,7 @@
 import type {
   Actor,
+  CardDefId,
+  CardDefinition,
   EnemyActor,
   Intent,
   IntentScript,
@@ -51,6 +53,8 @@ export interface TurnFlowContext {
    * status hooks resolve correctly.
    */
   customHandlers?: ReadonlyMap<string, CustomEffectHandler>;
+  /** Card-def registry for `addCardToPile` effect. */
+  cards?: { get(id: CardDefId): CardDefinition };
 }
 
 export type CombatOutcome = 'inProgress' | 'won' | 'lost';
@@ -266,5 +270,6 @@ function toExecutionContext(tfCtx: TurnFlowContext): ExecutionContext {
     constants: tfCtx.constants,
     run: tfCtx.run,
     customHandlers: tfCtx.customHandlers,
+    cards: tfCtx.cards,
   };
 }
