@@ -112,19 +112,11 @@ export const CARD_BASH: CardDefinition = {
 // ====================================================================
 // === Round-1 additions ===============================================
 //
-// 신규 카드들. 일부 효과는 메커니즘 미구현 (TODO 표기) — 데이터는
-// 정확히 들어가지만 효과 발동은 다음 라운드 이후 구현 예정.
-//
-// 미구현 효과 요약:
-//  - 발견 (Discover) : 골동품 감정. UI 통합 + 'discoverFromPool' 효과 필요.
-//  - addCardToPile(self) : 매직미사일·쉴드. executor에서 deferred 상태.
-//  - 인접 적 / 체인 / 라이더 : 파이어볼·체인라이트닝·독약병. 별도 핸들러.
-//  - 동적 dmg 강화 : 보석 건틀릿(카드ID별), 단검술 숙련(태그별).
-//  - 마지막 마법 복제 : 거울상.
-//  - 다음 턴 에너지 예약 : 메모라이즈.
-//  - 더블캐스트 재발동·마법간소화 비용 : 엔진의 playCard 경로 손봐야 함.
-//  - 상태이상 hook : 판금/가시/화상/빙결/기절. 데이터에 hook이 들어 있거나
-//    TODO 주석으로 표시. 다음 라운드에서 커스텀 핸들러로 연결.
+// 신규 카드들. 모든 효과는 (별도 메모가 있는 곳을 제외하고) 엔진 구현
+// 완료 상태. 커스텀 핸들러는 src/engine/effects/custom-handlers.ts,
+// playCard 보강(cost override / effects override / 더블캐스트 / 라이더 /
+// last-magic 추적)은 src/engine/integration/game.ts 의
+// combatPlayCard 참조.
 // ====================================================================
 
 // --- 단일 카드 (이벤트/상점/일반 보상용) ---
@@ -141,15 +133,11 @@ export const CARD_CRUEL_THRUST: CardDefinition = {
   modifierPoolRefs: [POOL_PHYSICAL_ID, POOL_SINGLE_ATTACK_ID],
 };
 
-/**
- * TODO(B-round): 발견 시스템. 'discoverFromPool' 커스텀 효과 + UI 통합 필요.
- * 현재는 단순 stub damage로 대체 (효과 발동 시 아무 일도 안 일어남).
- */
 export const CARD_ARTIFACT_APPRAISE: CardDefinition = {
   id: id<CardDefId>('artifact_appraise'), name: '골동품 감정',
   cost: { kind: 'fixed', value: 1 }, type: 'skill', target: { kind: 'none' },
   rarity: 'rare', tags: [TAG_PHYSICAL, TAG_SINGLE_ATTACK], keywords: ['exhaust'],
-  baseDescription: '전투골동품 풀에서 3장 발견 — 1장을 손으로. 소멸. (TODO: 발견 미구현)',
+  baseDescription: '전투골동품 풀에서 3장 발견 — 1장을 손에 임시 카드로 추가. 소멸.',
   baseEffects: [
     { kind: 'custom', handlerId: 'discoverFromPool', params: { poolId: 'pool_combat_artifact', count: 3, temporary: true } },
   ],
@@ -257,15 +245,11 @@ export const CARD_RELIC_RED_CUBE: CardDefinition = {
   modifierPoolRefs: [],
 };
 
-/**
- * TODO(B-round): "대상의 모든 버프 제거" — 현재 removeStatus는 1개 status만
- * 지정 가능. 'removeAllBuffs' 커스텀 핸들러 필요. 현재 stub.
- */
 export const CARD_RELIC_REVERSAL: CardDefinition = {
   id: id<CardDefId>('relic_reversal'), name: '유물 : 역산 장치',
   cost: { kind: 'fixed', value: 0 }, type: 'skill', target: { kind: 'enemy' },
   rarity: 'legendary', tags: [TAG_RELIC], keywords: ['exhaust'],
-  baseDescription: '대상에게 부여된 버프 전부 제거. 소멸. (TODO: 미구현)',
+  baseDescription: '대상에게 부여된 모든 상태 제거. 소멸.',
   baseEffects: [{ kind: 'custom', handlerId: 'removeAllBuffs', params: { target: 'enemy' } }],
   modifierPoolRefs: [],
 };
@@ -293,28 +277,20 @@ export const CARD_STONE_THROW: CardDefinition = {
   modifierPoolRefs: [POOL_PHYSICAL_ID, POOL_SINGLE_ATTACK_ID],
 };
 
-/**
- * TODO(C-round): "이번 전투에서 [단검] 태그 카드 피해량 +1" — 태그 기반
- * 전투 한정 dmg-boost 시스템 필요. 현재 stub (효과 없음).
- */
 export const CARD_DAGGER_MASTERY: CardDefinition = {
   id: id<CardDefId>('dagger_mastery'), name: '단검술 숙련',
   cost: { kind: 'fixed', value: 2 }, type: 'power', target: { kind: 'self' },
   rarity: 'common', tags: [TAG_DAMAGE_BOOST, TAG_TECHNIQUE], keywords: [],
-  baseDescription: '이번 전투에서 [단검] 카드의 피해량 +1 (TODO: 미구현).',
+  baseDescription: '이번 전투에서 [단검] 태그 카드의 피해량 +1.',
   baseEffects: [{ kind: 'custom', handlerId: 'combatDamageBoostByTag', params: { tag: 'dagger', delta: 1 } }],
   modifierPoolRefs: [],
 };
 
-/**
- * TODO(D-round): "다음 공격 피해량만큼 대상에 독 부여" — 다음 공격 라이더
- * 시스템 필요. 현재 stub.
- */
 export const CARD_POISON_POTION: CardDefinition = {
   id: id<CardDefId>('poison_potion'), name: '독약병',
   cost: { kind: 'fixed', value: 1 }, type: 'skill', target: { kind: 'self' },
   rarity: 'common', tags: [TAG_PHYSICAL, TAG_SINGLE_ATTACK], keywords: [],
-  baseDescription: '다음 공격 카드의 피해량만큼 대상에 중독 부여 (TODO: 미구현).',
+  baseDescription: '다음 공격 카드의 최종 피해량만큼 대상에 중독 부여.',
   baseEffects: [{ kind: 'custom', handlerId: 'nextAttackRiderPoison', params: {} }],
   modifierPoolRefs: [POOL_PHYSICAL_ID, POOL_SINGLE_ATTACK_ID],
 };
@@ -389,14 +365,11 @@ export const CARD_MAGIC_FIRE_WALL: CardDefinition = {
   modifierPoolRefs: [],
 };
 
-/**
- * TODO(B-round): addCardToPile 실행 (executor에서 deferred). 현재 base damage만.
- */
 export const CARD_MAGIC_MISSILE: CardDefinition = {
   id: id<CardDefId>('magic_missile'), name: '마법 : 매직미사일',
   cost: { kind: 'fixed', value: 1 }, type: 'attack', target: { kind: 'enemy' },
   rarity: 'common', tags: [TAG_MAGIC, TAG_BASIC_MAGIC, TAG_SINGLE_ATTACK], keywords: [],
-  baseDescription: '단일 적에게 3의 피해. "매직미사일" 1장을 손에 생성 (TODO: 미구현).',
+  baseDescription: '단일 적에게 3의 피해. "매직미사일" 1장을 손에 생성 (임시).',
   baseEffects: [
     { kind: 'damage', amount: 3, target: 'enemy' },
     { kind: 'addCardToPile', cardDefId: id<CardDefId>('magic_missile'), pile: 'hand' },
@@ -438,14 +411,11 @@ export const CARD_MAGIC_EM_FIELD: CardDefinition = {
   modifierPoolRefs: [],
 };
 
-/**
- * TODO(B-round): addCardToPile 실행 필요. 현재 base block만.
- */
 export const CARD_MAGIC_SHIELD: CardDefinition = {
   id: id<CardDefId>('magic_shield'), name: '마법 : 쉴드',
   cost: { kind: 'fixed', value: 1 }, type: 'skill', target: { kind: 'self' },
   rarity: 'common', tags: [TAG_MAGIC, TAG_BASIC_MAGIC, TAG_SINGLE_DEFENSE], keywords: [],
-  baseDescription: '방어도 7 획득. "마법 : 쉴드" 1장을 손에 생성 (TODO: 미구현).',
+  baseDescription: '방어도 7 획득. "마법 : 쉴드" 1장을 손에 생성 (임시).',
   baseEffects: [
     { kind: 'gainBlock', amount: 7 },
     { kind: 'addCardToPile', cardDefId: id<CardDefId>('magic_shield'), pile: 'hand' },
@@ -453,26 +423,20 @@ export const CARD_MAGIC_SHIELD: CardDefinition = {
   modifierPoolRefs: [],
 };
 
-/**
- * TODO(D-round): 다음 턴 에너지 +2 예약. 현재 stub.
- */
 export const CARD_MAGIC_MEMORIZE: CardDefinition = {
   id: id<CardDefId>('magic_memorize'), name: '마법 : 메모라이즈',
   cost: { kind: 'fixed', value: 1 }, type: 'skill', target: { kind: 'self' },
   rarity: 'common', tags: [TAG_MAGIC, TAG_BASIC_MAGIC], keywords: [],
-  baseDescription: '다음 턴 시작 시 에너지 +2 (TODO: 미구현).',
+  baseDescription: '다음 턴 시작 시 에너지 +2.',
   baseEffects: [{ kind: 'custom', handlerId: 'nextTurnEnergyReserve', params: { amount: 2 } }],
   modifierPoolRefs: [],
 };
 
-/**
- * TODO(C-round): 마지막 사용 마법 카드 복제. 현재 stub (아무것도 안 함).
- */
 export const CARD_MAGIC_MIRROR_IMAGE: CardDefinition = {
   id: id<CardDefId>('magic_mirror_image'), name: '마법 : 거울상',
   cost: { kind: 'fixed', value: 0 }, type: 'skill', target: { kind: 'self' },
   rarity: 'rare', tags: [TAG_MAGIC, TAG_SUPPORT_MAGIC], keywords: ['exhaust'],
-  baseDescription: '마지막에 사용한 "마법" 카드 1장을 손에 복제. 소멸. (TODO: 미구현)',
+  baseDescription: '마지막에 사용한 "마법" 카드 1장을 손에 복제. 소멸.',
   baseEffects: [{ kind: 'custom', handlerId: 'cloneLastMagicToHand', params: {} }],
   modifierPoolRefs: [],
 };

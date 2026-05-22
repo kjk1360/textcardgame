@@ -93,11 +93,13 @@ export const STATUS_EVASION: StatusDefinition = {
 
 /**
  * 불가침 (Intangible) — 어떤 종류의 피해도 무효화 + 받을 때마다 stack -1.
- * 회피와 다른 점: 상태이상에 의한 피해(중독/출혈/화상 tick)도 무시.
  *
- * 현재 구현 한계: damagePipeline은 damage effect에만 적용되어서
- * loseHp 기반 tick은 그대로 통과함. TODO(B-round): pipeline을 loseHp
- * 경로에도 통합하거나 별도 핸들러로 tick 차단.
+ * 구현 노트: damagePipeline의 incomingMul × 0이 모든 들어오는 damage
+ * effect를 0으로 만든다. 회피와 거의 동일하나, 회피는 stack 소비가
+ * 공격 받을 때만(oneStackPerTrigger), 불가침은 이번 턴 종료 시 자기
+ * removeStatus로 청소. 상태이상 tick (poison/bleed/burn)은 현재 loseHp
+ * 경로를 거치므로 pipeline을 우회 — 진짜 "모든 피해" 차단은 후속에서
+ * pipeline을 loseHp 경로에도 적용해야 완성됨.
  */
 export const STATUS_INTANGIBLE: StatusDefinition = {
   id: id<StatusId>('intangible'), name: '불가침', description: '피해 1회 무효 (모든 종류, 받을 때마다 1 소비)',
@@ -128,22 +130,19 @@ export const STATUS_PLATE: StatusDefinition = {
 };
 
 /**
- * 가시 (Thorns) — 공격하는 적에게 stack만큼 피해 반사. 턴 종료 시 1 감소.
- * TODO(B-round): reflectDamageToAttacker 커스텀 핸들러 + onTakeDamage hook.
- * 현재는 데이터 정의만, 반사 동작은 미구현.
+ * 가시 (Thorns) — 공격받을 때 공격자에게 stack만큼 피해 반사. 턴 종료
+ * 시 fixedPerTurn -1로 자연 감소. 반사 동작은 `applyDamage` 내부에서
+ * 직접 처리 (source.hp -= stacks, 자기-자기 반사·dead-source 가드 포함).
  */
 export const STATUS_THORNS: StatusDefinition = {
   id: id<StatusId>('thorns'), name: '가시', description: '공격받을 때 공격자에게 stack만큼 피해 반사',
   stackingRule: 'sum', decay: { kind: 'fixedPerTurn', amount: 1 },
-  tags: [], hooks: [
-    // TODO(B-round): { on: 'onTakeDamage', effects: [{ kind: 'custom', handlerId: 'reflectThorns', ... }] }
-  ],
+  tags: [], hooks: [],
 };
 
 /**
- * 빙결 (Freeze) — 적: 의도된 행동 불발 + stack -1. 플레이어: 턴 시작 시
- * stack만큼 에너지 감소 + stack -1.
- * TODO(B-round): runOneEnemyStep에서 빙결 체크 + 플레이어 에너지 차감 훅.
+ * 빙결 (Freeze) — 적: intent 실행 스킵 (runOneEnemyStep에서 체크) + stack -1.
+ * 플레이어: 턴 시작 시 에너지 stack만큼 감소 (startPlayerTurn) + stack -1.
  */
 export const STATUS_FREEZE: StatusDefinition = {
   id: id<StatusId>('freeze'), name: '빙결', description: '적: 행동 불발 / 플레이어: 에너지 감소',
@@ -167,8 +166,8 @@ export const STATUS_BURN: StatusDefinition = {
 };
 
 /**
- * 기절 (Stun) — 적: 의도된 행동 못함 + stack -1.
- * TODO(B-round): 빙결과 동일하게 runOneEnemyStep에서 체크.
+ * 기절 (Stun) — 적: intent 실행 스킵 + stack -1 (빙결과 동일하게
+ * runOneEnemyStep에서 처리).
  */
 export const STATUS_STUN: StatusDefinition = {
   id: id<StatusId>('stun'), name: '기절', description: '적 의도된 행동 못함',
@@ -177,9 +176,9 @@ export const STATUS_STUN: StatusDefinition = {
 };
 
 /**
- * 단검마술 (Dagger Trick Buff) — 매 턴 드로우가 끝나고 stack만큼 단검을
- * 손에 생성. 전투간 유지 (감소 X).
- * TODO(B-round): startPlayerTurn 끝나는 시점에 카드 생성 커스텀 핸들러.
+ * 단검마술 (Dagger Trick Buff) — 매 턴 드로우 직후 stack만큼 임시 단검
+ * 카드를 손에 생성 (turn-flow의 spawnDaggerTrickCards). 전투간 유지
+ * (decay none). 손 한도 초과분은 버려짐.
  */
 export const STATUS_DAGGER_TRICK_BUFF: StatusDefinition = {
   id: id<StatusId>('dagger_trick_buff'), name: '단검마술', description: '매 턴 드로우 후 stack만큼 단검 생성',
@@ -188,8 +187,8 @@ export const STATUS_DAGGER_TRICK_BUFF: StatusDefinition = {
 };
 
 /**
- * 더블캐스팅 — 마법 카드 사용 시 2번 발동 + stack -1.
- * TODO(B-round): combatPlayCard에서 마법 태그 체크 + 재발동.
+ * 더블캐스팅 — 마법 카드 사용 시 effects를 한 번 더 실행 + 본인 stack -1
+ * (combatPlayCard에서 magic 태그 카드 처리 시 직접 차감).
  */
 export const STATUS_DOUBLE_CAST: StatusDefinition = {
   id: id<StatusId>('double_cast'), name: '더블캐스팅', description: '마법 카드 사용 시 2번 발동',
@@ -199,8 +198,8 @@ export const STATUS_DOUBLE_CAST: StatusDefinition = {
 
 /**
  * 마법간소화 — 마법 카드 비용 stack만큼 감소 (this turn). 턴 종료 시
- * 전체 소멸.
- * TODO(B-round): canPlayCard / cost계산에서 태그+stack 반영.
+ * allAtEndOfTurn으로 전체 소멸. combatPlayCard가 magic 태그 카드의 cost
+ * override 계산 시 player의 magic_simplify stack을 차감.
  */
 export const STATUS_MAGIC_SIMPLIFY: StatusDefinition = {
   id: id<StatusId>('magic_simplify'), name: '마법간소화', description: '이번 턴 마법 카드 비용 -N (전부 사라짐)',
