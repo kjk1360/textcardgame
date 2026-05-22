@@ -1,21 +1,22 @@
 {
-  "name": "textcrawlergame",
-  "version": "0.0.1",
+  "name": "ccgame",
+  "version": "0.1.0",
   "description": "Text-based TCG + RPG dungeon crawler. Card-farming meta-progression across characters via a shared dimensional warehouse.",
   "bin": {
-    "crtgame": "./dist/cli.js"
+    "ccgame": "dist/cli.js"
   },
   "type": "module",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/postbuild.mjs",
     "build:data": "tsx scripts/build-data.ts",
     "dev": "tsx src/cli.tsx",
     "start": "node dist/cli.js",
     "test": "vitest run",
-    "dump": "tsx src/scripts/dump.ts"
+    "dump": "tsx src/scripts/dump.ts",
+    "prepublishOnly": "npm run build && npm test"
   },
   "files": [
     "dist",
@@ -25,19 +26,33 @@
   "keywords": [
     "cli",
     "tui",
+    "ink",
     "game",
     "roguelike",
     "deckbuilder",
-    "tcg"
+    "tcg",
+    "rpg"
   ],
-  "author": "",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kjk1360/textcardgame.git"
+  },
+  "homepage": "https://github.com/kjk1360/textcardgame#readme",
+  "bugs": {
+    "url": "https://github.com/kjk1360/textcardgame/issues"
+  },
+  "author": "kylin3163",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "chokidar": "^5.0.0",
     "env-paths": "^4.0.0",
     "ink": "^7.0.3",
     "js-yaml": "^4.1.1",
     "react": "^19.2.6",
+    "simple-update-notifier": "^2.0.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {

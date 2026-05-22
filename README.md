@@ -1,4 +1,4 @@
-# textcrawlergame
+# ccgame
 
 터미널에서 동작하는 텍스트 기반 TCG + RPG 던전 크롤러.
 
@@ -12,38 +12,64 @@
 
 ## 설치
 
-```
-npm install -g textcrawlergame
+Node.js 20 이상 필요.
+
+```sh
+npm install -g ccgame
 ```
 
 ## 실행
 
+설치 후 어디서나:
+
+```sh
+ccgame
 ```
-crtgame
+
+기타 명령:
+
+```sh
+ccgame --version   # 설치된 버전 확인
+ccgame --help      # 사용법
 ```
 
-## 개발 상태
+## 업데이트
 
-**Phase 1: 아키텍처 설계 진행 중.**
-구현 전 설계 문서는 `docs/architecture/` 참조.
+게임 시작 시 npm 레지스트리를 (하루 1회 캐시) 확인해서 새 버전이 있으면 안내가 뜹니다. 실제로 받아오려면:
 
-| 단계 | 상태 |
-|---|---|
-| Phase 1 — 아키텍처 설계 문서 | 진행 중 |
-| Phase 2 — 엔진 + 데이터 파이프라인 골격 | 미시작 |
-| Phase 3 — UI (Ink) + 저장 시스템 | 미시작 |
-| Phase 4 — 콘텐츠 작성 스킬 | 미시작 |
-| Phase 5 — 콘텐츠 채우기 | 미시작 |
+```sh
+npm install -g ccgame@latest
+```
+
+## 개발
+
+저장소를 직접 클론해서 돌리려면:
+
+```sh
+git clone https://github.com/kjk1360/textcardgame.git
+cd textcardgame
+npm install
+npm run dev          # tsx로 src/cli.tsx 직접 실행
+npm test             # 전체 테스트
+npm run dump         # 등록된 카드/풀/이벤트 dump
+npm run build        # dist/ 빌드 (publish용)
+```
 
 ## 폴더 구조
 
 ```
-textcrawlergame/
-├── src/                  # TypeScript 소스 (엔진/UI/데이터 로더)
-│   └── data/
-│       └── generated/    # authoring/ 에서 빌드된 JSON (gitignore X, 커밋함)
-├── authoring/            # 디자이너용 콘텐츠 소스 (xlsx/yaml)
-├── scripts/              # 빌드 스크립트 (data 파이프라인 등)
-└── docs/
-    └── architecture/     # 설계 문서 (이 단계)
+ccgame/
+├── src/
+│   ├── cli.tsx              # 진입점 (bin = ccgame)
+│   ├── ui/                  # Ink/React 화면
+│   ├── engine/              # 전투·플로우·맵·상태 엔진
+│   ├── data/                # 카드/스킬/이벤트 정의 (카테고리별 파일)
+│   └── scripts/dump.ts      # 컨텐츠 dump CLI
+├── scripts/postbuild.mjs    # tsc 후 셔뱅 복원
+├── docs/architecture/       # 설계 문서
+└── package.json
 ```
+
+## 라이선스
+
+MIT
