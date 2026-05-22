@@ -385,6 +385,10 @@ function makeMockHost(opts: {
   const host: FlowHost = {
     sampleCardsFromPool: (_poolId, n) => (opts.poolCards ?? []).slice(0, n),
     sampleCardsFromPools: (_poolIds, n) => (opts.poolCards ?? []).slice(0, n),
+    sampleShopItems: ({ count }) => (opts.poolCards ?? []).slice(0, count).map(defId => ({ defId, priceGold: 50 })),
+    getCurrentRunGold: () => 9999,
+    buyShopCard: () => true,
+    payEngraveCost: () => true,
     attachCardToDestination: (defId, dest) => {
       log.attachedCards.push({ defId, dest });
       const inst: CardInstance = {

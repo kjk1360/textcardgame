@@ -44,6 +44,7 @@ export function EventScreen(): React.ReactElement {
     case 'awaitingSkillPick':  return <SkillPickView status={status} />;
     case 'awaitingCardUpgradeTarget': return <UpgradeTargetView status={status} />;
     case 'awaitingModifierPick':      return <ModifierPickView status={status} />;
+    case 'awaitingShop':       return <ShopView status={status} />;
     case 'inCombat':           return <Text dimColor>(combat in progress — switching screen…)</Text>;
     case 'idle':               return <Text dimColor>(idle)</Text>;
     case 'finished':           return <Text dimColor>(event finished — returning to map…)</Text>;
@@ -341,6 +342,87 @@ function CardInstanceDetail({ card }: { card: CardInstance }): React.ReactElemen
         </Box>
       )}
     </Box>
+  );
+}
+
+// ====================================================================
+// shop
+// ====================================================================
+
+function ShopView({
+  status,
+}: {
+  status: {
+    items: ReadonlyArray<{ defId: CardDefId; priceGold: number; bought: boolean }>;
+    goldHave: number;
+    engraveAvailable: boolean;
+    engraveCost: number;
+  };
+}): React.ReactElement {
+  const game = useGame();
+  const dispatch = useDispatch();
+  const [focused, setFocused] = useState<CardDefId | null>(status.items[0]?.defId ?? null);
+
+  type Action =
+    | { kind: 'buy'; index: number; defId: CardDefId; priceGold: number; bought: boolean; canAfford: boolean }
+    | { kind: 'engrave' }
+    | { kind: 'leave' };
+
+  const items: FocusListItem<Action>[] = [];
+  status.items.forEach((it, idx) => {
+    const def = game.registries.cards.get(it.defId);
+    const canAfford = !it.bought && status.goldHave >= it.priceGold;
+    const flag = it.bought ? '✓ 구매완료' : `${it.priceGold}G`;
+    items.push({
+      id: `buy-${idx}`,
+      label: `[구매] ${wrapWithGradeBrackets(def.name, def.rarity)} — ${flag}`,
+      color: gradeColor(def.rarity),
+      value: { kind: 'buy', index: idx, defId: it.defId, priceGold: it.priceGold, bought: it.bought, canAfford },
+      disabled: it.bought || !canAfford,
+      disabledReason: it.bought ? '이미 구매함' : (!canAfford ? `${it.priceGold}G 필요` : undefined),
+    });
+  });
+  if (status.engraveAvailable) {
+    const canEngrave = status.goldHave >= status.engraveCost;
+    items.push({
+      id: 'engrave',
+      label: `[능력 각인] 보유 카드 한 장에 강화 — ${status.engraveCost}G`,
+      value: { kind: 'engrave' },
+      disabled: !canEngrave,
+      disabledReason: canEngrave ? undefined : `${status.engraveCost}G 필요`,
+    });
+  }
+  items.push({ id: 'leave', label: '나간다', value: { kind: 'leave' } });
+
+  return (
+    <ThreeBoxLayout
+      title={`차원 상인 — 보유 ${status.goldHave}G`}
+      main={
+        <Box flexDirection="column">
+          <Text>"필요한 만큼 가져가시게."</Text>
+          <Box marginTop={1}>
+            <FocusList
+              items={items}
+              onSelect={it => {
+                const v = it.value;
+                dispatch(() => {
+                  if (v.kind === 'buy') game.flowShopBuyCard(v.index);
+                  else if (v.kind === 'engrave') game.flowShopEngrave();
+                  else if (v.kind === 'leave') game.flowShopLeave();
+                });
+              }}
+              onFocusChange={it => {
+                if (!it) { setFocused(null); return; }
+                if (it.value.kind === 'buy') setFocused(it.value.defId);
+                else setFocused(null);
+              }}
+            />
+          </Box>
+        </Box>
+      }
+      bottom={<Text dimColor>↑↓ 선택  Enter 확정  · 골드 한도 내 여러 장 구매 가능</Text>}
+      right={<RightPanelWithSkills>{focused ? <CardDefDetail defId={focused} /> : null}</RightPanelWithSkills>}
+    />
   );
 }
 

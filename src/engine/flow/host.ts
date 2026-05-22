@@ -115,4 +115,33 @@ export interface FlowHost {
   /** Current run deck size. Used by cardOffer.fillToDeckCount to
    *  compute "pick N to fill the deck to M" semantics. */
   getCurrentDeckSize(): number;
+
+  // ---- shopOffer ----
+  /**
+   * Sample `count` cards from `poolId` and tag each with a price based
+   * on the rarity → price table. Cards already shown should NOT repeat
+   * (no replacement). 진열용.
+   */
+  sampleShopItems(opts: {
+    poolId: string;
+    count: number;
+    priceTable?: Readonly<Record<string, number>>;
+  }): Array<{ defId: CardDefId; priceGold: number }>;
+
+  /** Current run gold (for shop affordability). */
+  getCurrentRunGold(): number;
+
+  /**
+   * Try to buy a card at `priceGold` from shop. Deducts gold and adds
+   * to the current run deck. Returns false if insufficient gold (no
+   * gold deducted, no card added).
+   */
+  buyShopCard(defId: CardDefId, priceGold: number): boolean;
+
+  /**
+   * Try to pay `priceGold` for the engrave option (능력 각인). Just
+   * deducts gold — actual card-upgrade UI happens via the engraveNext
+   * step (cardUpgrade) the runtime transitions to.
+   */
+  payEngraveCost(priceGold: number): boolean;
 }

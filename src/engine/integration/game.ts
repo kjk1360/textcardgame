@@ -763,6 +763,17 @@ export class Game {
     return this.runFlow(rt => rt.pickCardForModifierAttach(cardInstanceId, this.buildFlowCtx()));
   }
 
+  // ---- shopOffer ----
+  flowShopBuyCard(itemIndex: number): FlowStatus {
+    return this.runFlow(rt => rt.shopBuyCard(itemIndex, this.buildFlowCtx()));
+  }
+  flowShopEngrave(): FlowStatus {
+    return this.runFlow(rt => rt.shopEngrave(this.buildFlowCtx()));
+  }
+  flowShopLeave(): FlowStatus {
+    return this.runFlow(rt => rt.shopLeave(this.buildFlowCtx()));
+  }
+
   // ====================================================================
   // Combat
   // ====================================================================
@@ -1590,6 +1601,7 @@ export class Game {
       runDeck: { cards: run.deck },
       meta: this.state.global,
       character: { skillIds: slot.skillIds, difficultyLevel: slot.difficultyLevel },
+      runGold: run,
       rng: this.rng,
       onBeginCombat: (egId) => { this.beginCombatWithGroup(egId); },
     });

@@ -390,6 +390,11 @@ function collectStepTargets(step: FlowStep): string[] {
       if (step.afterDefeatNext) t.push(step.afterDefeatNext);
       return t;
     }
+    case 'shopOffer': {
+      const t = [step.leaveNext];
+      if (step.engraveNext) t.push(step.engraveNext);
+      return t;
+    }
     case 'goto':
       return [step.stepId];
     case 'end':

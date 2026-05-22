@@ -51,6 +51,7 @@ export type FlowStep =
   | ApplyEffectStep
   | BranchStep
   | CombatStartStep
+  | ShopOfferStep
   | GotoStep
   | EndStep;
 
@@ -188,6 +189,26 @@ export interface CombatStartStep {
   readonly enemyGroupId: EnemyGroupId;
   readonly afterVictoryNext: string;
   readonly afterDefeatNext?: string;
+}
+
+/**
+ * ShopOffer step — 상점 진열. POOL_MERCHANT 등에서 itemCount만큼 카드 진열,
+ * 각 카드별 가격은 등급에 따라 priceTable에서 결정. 플레이어는 골드 허용
+ * 한도 내에서 여러 장 구매 가능. 별도로 engraveCost 골드로 능력 각인
+ * (engraveNext 단계 — 보통 cardUpgrade) 선택 가능.
+ */
+export interface ShopOfferStep {
+  readonly kind: 'shopOffer';
+  readonly poolId: CardPoolId;
+  readonly itemCount: number;
+  /** Map rarity → priceGold. Defaults: common=50 / rare=150 / legendary=350. */
+  readonly priceTable?: Readonly<Record<string, number>>;
+  /** 능력 각인 골드 비용. undefined면 옵션 자체가 안 뜸. */
+  readonly engraveCost?: number;
+  /** 각인 옵션 선택 시 이동할 step id (보통 cardUpgrade 스텝). */
+  readonly engraveNext?: string;
+  /** "나간다" 선택 시 이동할 step id. */
+  readonly leaveNext: string;
 }
 
 export interface GotoStep {

@@ -59,6 +59,8 @@ export interface FlowHostDeps {
   readonly meta: MetaState;
   /** Current slot character's skills. */
   readonly character: { skillIds: SkillId[]; difficultyLevel: number };
+  /** Run-level gold (shopOffer affordability + spend). */
+  readonly runGold: { gold: number };
 
   // Utilities
   readonly rng: IRandom;
@@ -261,6 +263,56 @@ export class FlowHostImpl implements FlowHost {
 
   getCurrentDeckSize(): number {
     return this.deps.runDeck.cards.length;
+  }
+
+  // ====================================================================
+  // shopOffer
+  // ====================================================================
+
+  /** Default price table by rarity. */
+  private static readonly DEFAULT_SHOP_PRICES: Record<string, number> = {
+    common:    50,
+    rare:      150,
+    legendary: 350,
+  };
+
+  sampleShopItems(opts: {
+    poolId: string;
+    count: number;
+    priceTable?: Readonly<Record<string, number>>;
+  }): Array<{ defId: CardDefId; priceGold: number }> {
+    const pool = this.deps.cardPools.get(opts.poolId as CardPoolId);
+    if (!pool) return [];
+    const defIds = sampleCardsFromPool(pool, opts.count, this.deps.rng);
+    const priceTable = opts.priceTable ?? FlowHostImpl.DEFAULT_SHOP_PRICES;
+    return defIds.map(defId => {
+      const def = this.deps.cards.get(defId);
+      const price = priceTable[def.rarity as string] ?? 100;
+      return { defId, priceGold: price };
+    });
+  }
+
+  getCurrentRunGold(): number {
+    return this.deps.runGold.gold;
+  }
+
+  buyShopCard(defId: CardDefId, priceGold: number): boolean {
+    if (this.deps.runGold.gold < priceGold) return false;
+    this.deps.runGold.gold -= priceGold;
+    const inst: CardInstance = {
+      instanceId: randomUUID() as CardInstanceId,
+      defId,
+      modifiers: [],
+      acquired: { kind: 'shop' },
+    };
+    this.deps.runDeck.cards.push(inst);
+    return true;
+  }
+
+  payEngraveCost(priceGold: number): boolean {
+    if (this.deps.runGold.gold < priceGold) return false;
+    this.deps.runGold.gold -= priceGold;
+    return true;
   }
 
   // ====================================================================

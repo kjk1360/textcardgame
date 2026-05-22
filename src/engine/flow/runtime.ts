@@ -98,6 +98,14 @@ export type FlowStatus =
       stepId: string;
       enemyGroupId: import('../../types/index.js').EnemyGroupId;
     }
+  | {
+      kind: 'awaitingShop';
+      stepId: string;
+      items: ReadonlyArray<{ defId: CardDefId; priceGold: number; bought: boolean }>;
+      goldHave: number;
+      engraveAvailable: boolean;
+      engraveCost: number;
+    }
   | { kind: 'finished'; outcome: 'success' | 'failure' | 'neutral' };
 
 export interface ResolvedChoiceOption {
@@ -137,6 +145,10 @@ type PendingStepState =
     }
   | {
       kind: 'inCombat';
+    }
+  | {
+      kind: 'shopOffer';
+      items: Array<{ defId: CardDefId; priceGold: number; bought: boolean }>;
     };
 
 interface InternalState {
@@ -431,6 +443,11 @@ export class FlowRuntime {
           return this.cachedStatus;
         }
 
+        case 'shopOffer': {
+          this.beginShopOffer(ctx);
+          return this.cachedStatus;
+        }
+
         case 'applyEffect': {
           const results = executeEffects(step.effects, ctx.execution);
           this.internal!.effectLog.push(...results);
@@ -709,6 +726,86 @@ export class FlowRuntime {
       stepId: this.internal!.currentStepId,
       enemyGroupId: step.enemyGroupId,
     };
+  }
+
+  // ====================================================================
+  // shopOffer
+  // ====================================================================
+
+  private beginShopOffer(ctx: FlowRuntimeContext): void {
+    const step = this.currentStep();
+    if (step.kind !== 'shopOffer') throw new Error('not shopOffer');
+    const host = this.requireHost(ctx, 'shopOffer');
+    const sampled = host.sampleShopItems({
+      poolId: step.poolId,
+      count: step.itemCount,
+      priceTable: step.priceTable,
+    });
+    const items = sampled.map(x => ({ ...x, bought: false }));
+    this.internal!.pending = { kind: 'shopOffer', items };
+    this.publishShopStatus(ctx);
+  }
+
+  /** UI calls this to buy item at index. */
+  shopBuyCard(itemIndex: number, ctx: FlowRuntimeContext): FlowStatus {
+    this.requireRunning();
+    const pending = this.requirePending('shopOffer');
+    const item = pending.items[itemIndex];
+    if (!item) throw new Error(`shopBuyCard: index ${itemIndex} out of range`);
+    if (item.bought) throw new Error(`shopBuyCard: index ${itemIndex} already bought`);
+    const host = this.requireHost(ctx, 'shopOffer.buy');
+    if (!host.buyShopCard(item.defId, item.priceGold)) {
+      // 골드 부족 — 그냥 상태 갱신 (UI에 가격 표시는 그대로)
+      return this.publishShopStatus(ctx);
+    }
+    item.bought = true;
+    return this.publishShopStatus(ctx);
+  }
+
+  /** UI calls this to spend engraveCost + transition to engraveNext step. */
+  shopEngrave(ctx: FlowRuntimeContext): FlowStatus {
+    this.requireRunning();
+    this.requirePending('shopOffer');
+    const step = this.currentStep();
+    if (step.kind !== 'shopOffer') throw new Error('not shopOffer');
+    if (step.engraveCost === undefined || !step.engraveNext) {
+      throw new Error('shopEngrave: this shop does not allow engrave');
+    }
+    const host = this.requireHost(ctx, 'shopOffer.engrave');
+    if (!host.payEngraveCost(step.engraveCost)) {
+      return this.publishShopStatus(ctx);  // gold 부족 — 그대로
+    }
+    this.internal!.pending = undefined;
+    this.goto(step.engraveNext);
+    return this.executeUntilBlocked(ctx);
+  }
+
+  /** UI calls this to leave the shop. */
+  shopLeave(ctx: FlowRuntimeContext): FlowStatus {
+    this.requireRunning();
+    this.requirePending('shopOffer');
+    const step = this.currentStep();
+    if (step.kind !== 'shopOffer') throw new Error('not shopOffer');
+    this.internal!.pending = undefined;
+    this.goto(step.leaveNext);
+    return this.executeUntilBlocked(ctx);
+  }
+
+  private publishShopStatus(ctx: FlowRuntimeContext): FlowStatus {
+    const pending = this.requirePending('shopOffer');
+    const step = this.currentStep();
+    if (step.kind !== 'shopOffer') throw new Error('not shopOffer');
+    const host = this.requireHost(ctx, 'shopOffer.status');
+    const engraveAvailable = step.engraveCost !== undefined && !!step.engraveNext;
+    this.cachedStatus = {
+      kind: 'awaitingShop',
+      stepId: this.internal!.currentStepId,
+      items: pending.items.map(it => ({ ...it })),
+      goldHave: host.getCurrentRunGold(),
+      engraveAvailable,
+      engraveCost: step.engraveCost ?? 0,
+    };
+    return this.cachedStatus;
   }
 
   // ====================================================================
