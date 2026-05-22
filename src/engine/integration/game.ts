@@ -40,6 +40,7 @@ import {
   playCard,
   type PlayCardOutcome,
 } from '../combat/play-card.js';
+import { resolveCardEffects } from '../modifiers/resolver.js';
 import type { GameRegistries } from './registries.js';
 import { evalCondition, type ConditionContext } from '../conditions/evaluator.js';
 import type { CustomEffectHandler, ExecutionContext } from '../effects/executor.js';
@@ -209,6 +210,32 @@ export type RunActivity =
         choices: CardDefId[];
         canSkip: boolean;
       };
+      /**
+       * Per-combat dynamic damage boosts. byTag/byCardDefId are summed
+       * into a card's damage effects in combatPlayCard before execution.
+       *  - byTag: 단검술 숙련 — "[단검] 카드 +1"
+       *  - byCardDefId: 보석 건틀릿 — 동일 ID 카드 +5
+       */
+      damageBoosts?: {
+        byTag?: Record<string, number>;
+        byCardDefId?: Record<string, number>;
+      };
+      /**
+       * Next-attack riders — applied to the next card with a damage
+       * effect, then consumed.
+       *  - poisonByDamage: 독약병 — 다음 공격 카드의 피해량만큼 적에게 중독.
+       */
+      pendingAttackRiders?: {
+        poisonByDamage?: boolean;
+      };
+      /**
+       * Last 마법 카드 ID — 거울상이 손에 복제할 때 참조.
+       */
+      lastMagicCardId?: CardDefId;
+      /**
+       * Energy bonus reserved for the next player turn (메모라이즈).
+       */
+      nextTurnEnergyBonus?: number;
     }
   | {
       kind: 'rewardPick';
@@ -752,13 +779,88 @@ export class Game {
       ? run.activity.enemies.find(e => e.instanceId === targetEnemyId)
       : undefined;
     const ctx = this.buildExecutionContextForCombat();
+
+    // 카드 데프 + resolved 정보를 미리 빼서 cost/effects override 계산.
+    const cardInHand = ctx.piles.hand.find(c => c.instanceId === cardInstanceId);
+    let costOverride: number | undefined;
+    let effectsOverride: ReturnType<typeof this.applyDynamicBoosts> = undefined;
+    let isMagic = false;
+    let cardDef: import('../../types/index.js').CardDefinition | undefined;
+    if (cardInHand) {
+      cardDef = this.registries.cards.get(cardInHand.defId);
+      isMagic = cardDef.tags.includes('magic' as any);
+      // 마법간소화 비용 차감
+      if (isMagic) {
+        const simplifyStacks = ctx.player.statuses.find(s => s.id === 'magic_simplify')?.stacks ?? 0;
+        if (simplifyStacks > 0 && cardDef.cost.kind === 'fixed') {
+          costOverride = Math.max(0, cardDef.cost.value - simplifyStacks);
+        }
+      }
+      // 단검술 숙련 / 보석 건틀릿 dmg boost
+      effectsOverride = this.applyDynamicBoosts(cardDef, cardInHand, run.activity);
+    }
+
     const outcome = playCard(
       cardInstanceId,
       ctx,
       this.registries.cards,
       this.registries.modifiers,
-      target ? { target } : undefined,
+      {
+        target,
+        costOverride,
+        effectsOverride,
+      },
     );
+
+    // 더블캐스팅: 마법 카드를 사용했고 player에 double_cast 스택이 있으면
+    // resolved.effects 한 번 더 실행 + decay 1.
+    if (
+      outcome.kind === 'played'
+      && isMagic
+      && run.activity.kind === 'inCombat'
+    ) {
+      const slotChar = this.requireCurrentSlot().character!;
+      const dc = slotChar.statuses.find(s => s.id === 'double_cast');
+      if (dc && dc.stacks > 0) {
+        const reCtx = this.buildExecutionContextForCombat();
+        reCtx.target = target;
+        reCtx.source = slotChar;
+        executeEffects(effectsOverride ?? outcome.resolved.effects, reCtx);
+        // decay 1
+        dc.stacks -= 1;
+        if (dc.stacks <= 0) {
+          slotChar.statuses = slotChar.statuses.filter(s => s.id !== 'double_cast');
+        }
+      }
+    }
+
+    // 마지막 마법 카드 ID 기록 (거울상이 참조)
+    if (outcome.kind === 'played' && isMagic && cardDef && run.activity.kind === 'inCombat') {
+      run.activity.lastMagicCardId = cardDef.id;
+    }
+
+    // 다음공격 라이더 (독약병): 카드의 effects에 damage가 있었으면 그
+    // 피해량만큼 대상에게 중독 부여. results에서 첫 'damage' 결과 사용.
+    if (
+      outcome.kind === 'played'
+      && run.activity.kind === 'inCombat'
+      && run.activity.pendingAttackRiders?.poisonByDamage
+    ) {
+      const dmgResult = outcome.results.find(r => r.kind === 'damage');
+      if (dmgResult && dmgResult.kind === 'damage' && dmgResult.outcome.calculated > 0) {
+        // 대상은 picked target (없으면 첫 살아있는 적)
+        const tgt = target ?? run.activity.enemies.find(e => e.hp > 0);
+        if (tgt) {
+          const poisonAmt = dmgResult.outcome.calculated;
+          // applyStatus 직접
+          const existing = tgt.statuses.find(s => s.id === 'poison');
+          if (existing) existing.stacks += poisonAmt;
+          else tgt.statuses.push({ id: 'poison' as any, stacks: poisonAmt });
+        }
+      }
+      // 라이더 소비
+      run.activity.pendingAttackRiders.poisonByDamage = false;
+    }
 
     // skill_sacrifice — re-execute the resolved effects once more
     // (don't re-spend energy, don't re-move card from hand; that already
@@ -772,7 +874,7 @@ export class Game {
       const reExecCtx = this.buildExecutionContextForCombat();
       reExecCtx.target = target;
       reExecCtx.source = slot.character!;
-      executeEffects(outcome.resolved.effects, reExecCtx);
+      executeEffects(effectsOverride ?? outcome.resolved.effects, reExecCtx);
     }
 
     // End-of-combat check
@@ -868,6 +970,11 @@ export class Game {
     const hasSacrifice = slot.skillIds.includes('skill_sacrifice' as SkillId);
     const drawCount = Math.max(0, this.constants.draw.perTurn - (hasSacrifice ? 1 : 0));
     startPlayerTurn(tfCtx, drawCount);
+    // 메모라이즈 보너스 적용
+    if (run.activity.nextTurnEnergyBonus && run.activity.nextTurnEnergyBonus > 0) {
+      slot.character!.energy += run.activity.nextTurnEnergyBonus;
+      run.activity.nextTurnEnergyBonus = 0;
+    }
     return 'inProgress';
   }
 
@@ -938,6 +1045,11 @@ export class Game {
     const hasSacrifice = slot.skillIds.includes('skill_sacrifice' as SkillId);
     const drawCount = Math.max(0, this.constants.draw.perTurn - (hasSacrifice ? 1 : 0));
     startPlayerTurn(tfCtx, drawCount);
+    // 메모라이즈: 다음 턴 에너지 보너스 적용 + 소비
+    if (run.activity.nextTurnEnergyBonus && run.activity.nextTurnEnergyBonus > 0) {
+      slot.character!.energy += run.activity.nextTurnEnergyBonus;
+      run.activity.nextTurnEnergyBonus = 0;
+    }
   }
 
   // --------------------------------------------------------------------
@@ -970,6 +1082,34 @@ export class Game {
       );
     }
     run.activity.pendingDiscover = undefined;
+  }
+
+  /**
+   * 단검술 숙련 / 보석 건틀릿 등의 동적 데미지 증가를 카드의 resolved
+   * effects에 적용한 사본을 반환. 적용 보너스가 없으면 undefined를
+   * 반환해서 호출측에서 원본을 그대로 쓰게 함.
+   */
+  private applyDynamicBoosts(
+    cardDef: import('../../types/index.js').CardDefinition,
+    cardInstance: import('../../types/index.js').CardInstance,
+    activity: { damageBoosts?: { byTag?: Record<string, number>; byCardDefId?: Record<string, number> } },
+  ): ReadonlyArray<import('../../types/index.js').Effect> | undefined {
+    const tagBoosts = activity.damageBoosts?.byTag ?? {};
+    const idBoosts = activity.damageBoosts?.byCardDefId ?? {};
+    let bonus = 0;
+    for (const tag of cardDef.tags) {
+      bonus += tagBoosts[tag as string] ?? 0;
+    }
+    bonus += idBoosts[cardDef.id as string] ?? 0;
+    if (bonus === 0) return undefined;
+    // resolved 효과를 다시 계산해서 damage 보너스 적용한 복사본 반환.
+    const resolved = resolveCardEffects(cardDef, cardInstance, this.registries.modifiers);
+    return resolved.effects.map(eff => {
+      if (eff.kind === 'damage' || eff.kind === 'damageMultiHit') {
+        return { ...eff, amount: eff.amount + bonus };
+      }
+      return eff;
+    });
   }
 
   /** Format an enemy's current intent as a short line for the UI. */

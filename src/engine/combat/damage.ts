@@ -137,6 +137,19 @@ export function applyDamage(
     killed = true;
   }
 
+  // 가시 (Thorns) — 공격받을 때 공격자에게 stack만큼 피해 반사.
+  // source가 있어야 하고 (status tick은 source 없음) 자기 자신 반사는 안 함.
+  // 반사 피해는 true damage (block 무시) — 게시판 일반 룰.
+  if (source && source !== target && source.hp > 0 && hpLost > 0) {
+    const thorns = target.statuses.find(s => s.id === 'thorns');
+    if (thorns && thorns.stacks > 0) {
+      // 직접 hp 차감 (재귀 applyDamage 호출 시 무한루프 위험 — 둘 다 thorns
+      // 가지면 핑퐁). 단순 true damage로 처리.
+      const refl = thorns.stacks;
+      source.hp = Math.max(0, source.hp - refl);
+    }
+  }
+
   return { attempted: raw, calculated, blockConsumed, hpLost, killed, blockBroken };
 }
 

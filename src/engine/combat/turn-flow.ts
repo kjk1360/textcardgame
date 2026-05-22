@@ -1,7 +1,9 @@
+import { randomUUID } from 'node:crypto';
 import type {
   Actor,
   CardDefId,
   CardDefinition,
+  CardInstanceId,
   EnemyActor,
   Intent,
   IntentScript,
@@ -95,10 +97,20 @@ export function startCombat(
 
 /**
  * Player turn start: energy reset, draw, fire start-of-turn status hooks.
+ *
+ * 빙결 처리: 플레이어가 빙결 stack > 0 이면 그 턴 에너지를 stack만큼
+ * 감소(0 미만 X). decay는 fixedPerTurn -1 (statuses.ts 정의) 이라 매 턴
+ * 끝에 자동으로 줄어듦. (별도 stack 차감을 여기서 또 하면 -2 됨)
  */
 export function startPlayerTurn(tfCtx: TurnFlowContext, drawCount?: number): void {
   tfCtx.player.energy = tfCtx.constants.energy.base + tfCtx.constants.energy.autoIncreasePerTurn;
   tfCtx.player.block = 0;
+
+  // 빙결으로 에너지 감소
+  const freezeStacks = tfCtx.player.statuses.find(s => s.id === 'freeze')?.stacks ?? 0;
+  if (freezeStacks > 0) {
+    tfCtx.player.energy = Math.max(0, tfCtx.player.energy - freezeStacks);
+  }
 
   fireStatusHooks(tfCtx.player, 'onOwnerTurnStart', tfCtx);
 
@@ -106,6 +118,34 @@ export function startPlayerTurn(tfCtx: TurnFlowContext, drawCount?: number): voi
   const count = drawCount ?? tfCtx.constants.draw.perTurn;
   if (count > 0) {
     draw(tfCtx.piles, count, tfCtx.rng, tfCtx.constants.hand.hardLimit);
+  }
+
+  // 단검마술: 드로우 직후 stacks만큼 임시 단검을 손에 생성.
+  // (CardInstance를 직접 push — 단검 def 가 존재해야 함.)
+  spawnDaggerTrickCards(tfCtx);
+}
+
+function spawnDaggerTrickCards(tfCtx: TurnFlowContext): void {
+  const buff = tfCtx.player.statuses.find(s => s.id === 'dagger_trick_buff');
+  if (!buff || buff.stacks <= 0) return;
+  if (!tfCtx.cards) return;
+  let daggerDef;
+  try {
+    daggerDef = tfCtx.cards.get('dagger' as CardDefId);
+  } catch {
+    return;
+  }
+  if (!daggerDef) return;
+  const handLimit = tfCtx.constants.hand.hardLimit;
+  for (let i = 0; i < buff.stacks; i++) {
+    if (tfCtx.piles.hand.length >= handLimit) break;
+    tfCtx.piles.hand.push({
+      instanceId: randomUUID() as CardInstanceId,
+      defId: daggerDef.id,
+      modifiers: [],
+      acquired: { kind: 'event', contextId: 'dagger_trick_buff' },
+      temporary: true,
+    });
   }
 }
 
@@ -157,8 +197,12 @@ export function runOneEnemyStep(
   // Reset enemy block at start of its turn (block is per-turn for enemies too)
   enemy.block = 0;
 
+  // 빙결·기절: intent 실행 스킵. 둘 다 fixedPerTurn -1 decay라 자동으로
+  // 줄어듦. 게시판 일반 룰: 빙결/기절 동안에도 턴 종료 훅·decay는 정상 처리.
+  const frozen = enemy.statuses.some(s => (s.id === 'freeze' || s.id === 'stun') && s.stacks > 0);
+
   const intent = enemy.intent;
-  if (intent) {
+  if (intent && !frozen) {
     const enemyCtx: ExecutionContext = {
       ...toExecutionContext(tfCtx),
       source: enemy,

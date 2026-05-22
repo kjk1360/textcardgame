@@ -233,16 +233,15 @@ export const CARD_STRENGTH_PILL: CardDefinition = {
   modifierPoolRefs: [],
 };
 
-/**
- * TODO(C-round): 같은 카드 ID의 피해량을 전투간 +5. 동적 dmg-boost 핸들러
- * + per-card-id 누적 상태 필요. 현재 base 14만 들어감.
- */
 export const CARD_RELIC_GEMSTONE_GAUNTLET: CardDefinition = {
   id: id<CardDefId>('relic_gemstone_gauntlet'), name: '유물 : 보석 건틀릿',
   cost: { kind: 'fixed', value: 0 }, type: 'attack', target: { kind: 'enemy' },
   rarity: 'legendary', tags: [TAG_SINGLE_ATTACK, TAG_RELIC], keywords: [],
-  baseDescription: '단일 적에게 14의 피해. 이후 "보석 건틀릿"의 피해량 +5 (이번 전투, TODO 미구현).',
-  baseEffects: [{ kind: 'damage', amount: 14, target: 'enemy' }],
+  baseDescription: '단일 적에게 14의 피해. 이번 전투 동안 "보석 건틀릿"의 피해량 +5.',
+  baseEffects: [
+    { kind: 'damage', amount: 14, target: 'enemy' },
+    { kind: 'custom', handlerId: 'boostCardDamage', params: { defId: 'relic_gemstone_gauntlet', delta: 5 } },
+  ],
   modifierPoolRefs: [],
 };
 
@@ -320,6 +319,19 @@ export const CARD_POISON_POTION: CardDefinition = {
   modifierPoolRefs: [POOL_PHYSICAL_ID, POOL_SINGLE_ATTACK_ID],
 };
 
+/**
+ * 단검 — 단검마술 버프가 매 턴 손에 생성하는 임시 카드. 자체로는 풀에
+ * 등록되지 않음 (보상/이벤트에서 안 나옴). 일반 단검 태그 + 소멸.
+ */
+export const CARD_DAGGER: CardDefinition = {
+  id: id<CardDefId>('dagger'), name: '단검',
+  cost: { kind: 'fixed', value: 0 }, type: 'attack', target: { kind: 'enemy' },
+  rarity: 'common', tags: [TAG_DAGGER, TAG_PHYSICAL, TAG_SINGLE_ATTACK], keywords: ['exhaust'],
+  baseDescription: '단일 적에게 3의 피해. 소멸.',
+  baseEffects: [{ kind: 'damage', amount: 3, target: 'enemy' }],
+  modifierPoolRefs: [POOL_DAGGER_ID, POOL_PHYSICAL_ID, POOL_SINGLE_ATTACK_ID],
+};
+
 export const CARD_TRICK_BELT: CardDefinition = {
   id: id<CardDefId>('trick_belt'), name: '속임수 벨트',
   cost: { kind: 'fixed', value: 3 }, type: 'skill', target: { kind: 'self' },
@@ -331,27 +343,25 @@ export const CARD_TRICK_BELT: CardDefinition = {
 
 // --- 마법 카드들 ---
 
-/**
- * TODO(C-round): 인접 적 타게팅. 현재 단일 6만 적용.
- */
 export const CARD_MAGIC_FIREBALL: CardDefinition = {
   id: id<CardDefId>('magic_fireball'), name: '마법 : 파이어볼',
   cost: { kind: 'fixed', value: 1 }, type: 'attack', target: { kind: 'enemy' },
   rarity: 'common', tags: [TAG_MAGIC, TAG_FIRE, TAG_BASIC_MAGIC], keywords: [],
-  baseDescription: '단일 적에게 6의 피해. 양쪽 인접 적에게 3의 피해 (TODO: 인접 미구현).',
-  baseEffects: [{ kind: 'damage', amount: 6, target: 'enemy' }],
+  baseDescription: '단일 적에게 6의 피해. 양쪽 인접 적에게 3의 피해.',
+  baseEffects: [
+    { kind: 'custom', handlerId: 'fireballAdjacent', params: { baseAmount: 6, sideAmount: 3 } },
+  ],
   modifierPoolRefs: [],
 };
 
-/**
- * TODO(C-round): 인덱스 기반 체인. 현재 단일 6만 적용.
- */
 export const CARD_MAGIC_CHAIN_LIGHTNING: CardDefinition = {
   id: id<CardDefId>('magic_chain_lightning'), name: '마법 : 체인라이트닝',
   cost: { kind: 'fixed', value: 1 }, type: 'attack', target: { kind: 'enemy' },
   rarity: 'common', tags: [TAG_MAGIC, TAG_LIGHTNING, TAG_BASIC_MAGIC], keywords: [],
-  baseDescription: '단일 적에게 6의 피해. 오른쪽 적에게 -1 피해로 재시전 (TODO: 미구현).',
-  baseEffects: [{ kind: 'damage', amount: 6, target: 'enemy' }],
+  baseDescription: '단일 적에게 6의 피해. 오른쪽 적에게 -1 피해로 연쇄 재시전.',
+  baseEffects: [
+    { kind: 'custom', handlerId: 'chainLightning', params: { initialAmount: 6, falloff: 1 } },
+  ],
   modifierPoolRefs: [],
 };
 
@@ -496,6 +506,7 @@ export const ALL_CARDS: ReadonlyArray<CardDefinition> = [
   // 일반 신규
   CARD_CRUEL_THRUST, CARD_ARTIFACT_APPRAISE,
   CARD_STONE_THROW, CARD_DAGGER_MASTERY, CARD_POISON_POTION, CARD_TRICK_BELT,
+  CARD_DAGGER,
   // 마법
   CARD_MAGIC_FIREBALL, CARD_MAGIC_CHAIN_LIGHTNING, CARD_MAGIC_ICE_BOLT,
   CARD_MAGIC_FIRE_WALL, CARD_MAGIC_MISSILE, CARD_MAGIC_BLIZZARD,

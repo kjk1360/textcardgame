@@ -38,6 +38,18 @@ export interface CardRegistryLookup {
 export interface PlayCardOptions {
   /** Player-picked target enemy (required when resolved card target is 'enemy'). */
   target?: EnemyActor;
+  /**
+   * Override the resolved fixed cost. Used by 마법간소화 (마법 카드 비용
+   * -N) and similar dynamic discounts. Applies only to fixed-cost cards;
+   * X-cost / unplayable unaffected. Cost can't go below 0.
+   */
+  costOverride?: number;
+  /**
+   * Override the resolved effects list. Used by 단검술 숙련 / 보석 건틀릿
+   * to boost damage values before execution. Caller is responsible for
+   * preserving the effect shape (target/kind etc.).
+   */
+  effectsOverride?: ReadonlyArray<import('../../types/index.js').Effect>;
 }
 
 export type PlayCardOutcome =
@@ -72,11 +84,14 @@ export function playCard(
   const def = cards.get(card.defId);
   const resolved = resolveCardEffects(def, card, modifiers);
 
-  // 2. Cost check
+  // 2. Cost check (override 적용: 마법간소화 등)
   if (resolved.cost.kind === 'unplayable') {
     return { kind: 'rejected', reason: 'unplayable' };
   }
-  const costValue = resolved.cost.kind === 'fixed' ? resolved.cost.value : 0;
+  const baseCost = resolved.cost.kind === 'fixed' ? resolved.cost.value : 0;
+  const costValue = resolved.cost.kind === 'fixed'
+    ? Math.max(0, opts?.costOverride ?? baseCost)
+    : 0;
   if (resolved.cost.kind === 'fixed' && ctx.player.energy < costValue) {
     return {
       kind: 'rejected',
@@ -106,14 +121,16 @@ export function playCard(
   // 5. Remove from hand (cards are in transit while effects fire)
   removeFromHand(ctx.piles, cardInstanceId);
 
-  // 6. Execute effects with the resolved (modifier-applied) list
+  // 6. Execute effects with the resolved (modifier-applied) list,
+  //    optionally overridden by the caller (단검술/보석 건틀릿 damage boost).
   //    Build a per-play context view: source = player, target = picked enemy
   const playCtx: ExecutionContext = {
     ...ctx,
     source: ctx.player,
     target: opts?.target,
   };
-  const results = executeEffects(resolved.effects, playCtx);
+  const effectsToRun = opts?.effectsOverride ?? resolved.effects;
+  const results = executeEffects(effectsToRun, playCtx);
 
   // 7. Place card in destination pile
   const destination: 'discard' | 'exhaust' = resolved.keywords.includes('exhaust')

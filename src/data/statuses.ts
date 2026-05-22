@@ -152,14 +152,18 @@ export const STATUS_FREEZE: StatusDefinition = {
 };
 
 /**
- * 화상 (Burn) — 피해를 입을 때 stack만큼 추가 피해 + stack -1. 턴 종료 시
- * 별도 피해 없이 stack -1만.
- * TODO(B-round): onTakeDamage 추가 피해 커스텀 핸들러.
+ * 화상 (Burn) — 피해를 입을 때 stack만큼 추가 피해 + 턴 종료 시 stack -1.
+ *
+ * 구현 단순화 메모: damagePipeline의 incomingAdd 로 모든 들어오는 피해에
+ * stack만큼 더해줌. 사용자 스펙의 "맞을 때마다 stack -1" 은 미반영 —
+ * 단일 decay 슬롯이 fixedPerTurn으로 차 있어서. 향후 필요시 onTakeDamage
+ * 훅으로 consume-on-hit 추가.
  */
 export const STATUS_BURN: StatusDefinition = {
   id: id<StatusId>('burn'), name: '화상', description: '피해받을 때 stack만큼 추가 피해. 턴 종료 시 1 감소',
   stackingRule: 'sum', decay: { kind: 'fixedPerTurn', amount: 1 },
   tags: [], hooks: [],
+  damagePipeline: [{ kind: 'incomingAdd', perStack: 1 }],
 };
 
 /**
